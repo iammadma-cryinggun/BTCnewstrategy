@@ -15,10 +15,18 @@ V7.0.7 Telegram命令处理器 - 完整交互支持
 
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 
 logger = logging.getLogger(__name__)
+
+# ⭐ 北京时间（UTC+8）
+BEIJING_TZ_OFFSET = timedelta(hours=8)
+
+
+def get_beijing_time():
+    """获取当前北京时间"""
+    return datetime.utcnow() + BEIJING_TZ_OFFSET
 
 
 class TelegramCommandHandler:
@@ -119,10 +127,12 @@ class TelegramCommandHandler:
 
         # ========== /status 命令 ==========
         elif command == '/status':
+            # ⭐ 使用北京时间
+            now_beijing = get_beijing_time()
             if self.config.has_position:
                 hold_time = 0
                 if self.config.entry_time:
-                    hold_time = (datetime.now() - self.config.entry_time).total_seconds() / 3600
+                    hold_time = (now_beijing - self.config.entry_time).total_seconds() / 3600
 
                 # 获取当前价格
                 current_price = 0
@@ -314,7 +324,8 @@ class TelegramCommandHandler:
                         # 保存状态
                         self.config.save_state()
 
-                        # 发送平仓通知
+                        # 发送平仓通知（⭐ 使用北京时间）
+                        now_beijing = get_beijing_time()
                         message = f"""
 ✅ *V7.0.7手动平仓成功*
 
@@ -324,7 +335,7 @@ class TelegramCommandHandler:
 {pnl_emoji} 盈亏: {pnl_pct:+.2f}%
 ⚠️ 原因: 手动平仓(/clear命令)
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
                         self.send_message(message)
 

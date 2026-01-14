@@ -5,10 +5,18 @@ V7.0.7 主程序 - 第二部分
 """
 
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ⭐ 北京时间（UTC+8）
+BEIJING_TZ_OFFSET = timedelta(hours=8)
+
+
+def get_beijing_time():
+    """获取当前北京时间"""
+    return datetime.utcnow() + BEIJING_TZ_OFFSET
 
 
 # ==================== [Telegram通知模块] ====================
@@ -44,6 +52,8 @@ class TelegramNotifier:
 
     def notify_signal(self, signal_type, confidence, description, price, tension, acceleration):
         """通知新信号"""
+        # ⭐ 使用北京时间
+        now_beijing = get_beijing_time()
         message = f"""
 🎯 *V7.0.7新信号*
 
@@ -54,12 +64,14 @@ class TelegramNotifier:
 📐 *张力*: {tension:.3f}
 🚀 *加速度*: {acceleration:.3f}
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         self.send_message(message)
 
     def notify_entry(self, direction, price, signal_type, confidence, tp, sl):
         """通知开仓"""
+        # ⭐ 使用北京时间
+        now_beijing = get_beijing_time()
         emoji = "📈" if direction == 'long' else "📉"
         message = f"""
 {emoji} *V7.0.7开仓*
@@ -71,12 +83,14 @@ class TelegramNotifier:
 🎯 *止盈*: ${tp:.2f}
 🛑 *止损*: ${sl:.2f}
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         self.send_message(message)
 
     def notify_exit(self, direction, entry_price, exit_price, pnl_pct, reason):
         """通知平仓"""
+        # ⭐ 使用北京时间
+        now_beijing = get_beijing_time()
         emoji = "✅" if pnl_pct > 0 else "❌"
         message = f"""
 {emoji} *V7.0.7平仓*
@@ -87,14 +101,23 @@ class TelegramNotifier:
 📊 *盈亏*: {pnl_pct:+.2f}%
 🎯 *原因*: {reason}
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         self.send_message(message)
 
     def notify_status(self):
         """通知系统状态"""
+        # ⭐ 使用北京时间
+        now_beijing = get_beijing_time()
         if self.config.has_position:
-            hold_time = datetime.now() - self.config.entry_time
+            # 计算持仓时长（假设entry_time也是北京时间）
+            if self.config.entry_time:
+                hold_delta = now_beijing - self.config.entry_time
+                hold_hours = hold_delta.total_seconds() / 3600
+                hold_time_str = f"{hold_hours:.1f}小时"
+            else:
+                hold_time_str = "未知"
+
             message = f"""
 📊 *V7.0.7持仓状态*
 
@@ -102,13 +125,15 @@ class TelegramNotifier:
 💰 *入场价*: ${self.config.entry_price:.2f}
 🎯 *止盈*: ${self.config.take_profit_price:.2f}
 🛑 *止损*: ${self.config.stop_loss_price:.2f}
-⏱ *持仓时长*: {hold_time}
+⏱ *持仓时长*: {hold_time_str}
 📊 *入场置信度*: {self.config.entry_confidence:.2f}
 
 📈 *总交易*: {self.config.total_trades}
 ✅ *盈利*: {self.config.winning_trades}
 ❌ *亏损*: {self.config.losing_trades}
 💵 *总盈亏*: {self.config.total_pnl:.2f}%
+
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         else:
             message = f"""
@@ -120,6 +145,6 @@ class TelegramNotifier:
 ❌ *亏损*: {self.config.losing_trades}
 💵 *总盈亏*: {self.config.total_pnl:.2f}%
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         self.send_message(message)

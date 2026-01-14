@@ -213,7 +213,7 @@ class DataFetcher:
         self.session = requests.Session()
 
     def fetch_btc_data(self, interval='4h', limit=300):
-        """获取BTC K线数据"""
+        """获取BTC K线数据（返回北京时间）"""
         try:
             url = "https://api.binance.com/api/v3/klines"
             params = {
@@ -234,7 +234,14 @@ class DataFetcher:
                 'taker_buy_quote', 'ignore'
             ])
 
+            # ⭐ 转换为北京时间（UTC+8）
+            # Binance API返回UTC时间戳（毫秒），需要转换为北京时间
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+            # 方法1：使用 timedelta（更兼容）
+            # UTC时间 + 8小时 = 北京时间
+            df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=8)
+
             df.set_index('timestamp', inplace=True)
 
             for col in ['open', 'high', 'low', 'close', 'volume']:
