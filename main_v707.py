@@ -139,7 +139,12 @@ class V707TradingEngine:
                 self.config.signal_history[-1]['filtered'] = True
                 self.config.signal_history[-1]['filter_reason'] = filter_reason
                 self.config.signal_history[-1]['traded'] = False
-                self.notifier.send_message(f"🚫 *信号被V7.0.5过滤器拦截*\n\n📊 信号: {signal_type}\n💰 价格: ${current_price:.2f}\n🚫 原因: {filter_reason}")
+                # ⭐ 使用纯文本，不用Markdown
+                self.notifier.send_message(f"""🚫 信号被V7.0.5过滤器拦截
+
+📊 信号: {signal_type}
+💰 价格: ${current_price:.2f}
+🚫 原因: {filter_reason}""")
                 return
 
             logger.info(f"[V7.0.5过滤器] {filter_reason}")

@@ -73,7 +73,7 @@ class TelegramCommandHandler:
             return []
 
     def send_message(self, message: str, parse_mode=None):
-        """发送消息"""
+        """发送消息（默认不使用Markdown避免解析错误）"""
         if not self.enabled:
             return
 
@@ -82,11 +82,16 @@ class TelegramCommandHandler:
             data = {
                 'chat_id': self.chat_id,
                 'text': message,
-                'parse_mode': parse_mode,
                 'disable_web_page_preview': True
             }
+
+            # ⭐ 只有明确指定parse_mode时才使用（避免Markdown解析错误）
+            if parse_mode:
+                data['parse_mode'] = parse_mode
+
             response = self.session.post(url, json=data, timeout=10)
             response.raise_for_status()
+            logger.info(f"[Telegram] 命令响应已发送")
         except Exception as e:
             logger.error(f"发送Telegram消息失败: {e}")
 

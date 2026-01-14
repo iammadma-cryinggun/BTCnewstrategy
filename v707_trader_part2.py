@@ -27,8 +27,8 @@ class TelegramNotifier:
         self.config = config
         self.base_url = f"https://api.telegram.org/bot{config.telegram_token}"
 
-    def send_message(self, message, parse_mode='Markdown'):
-        """发送Telegram消息"""
+    def send_message(self, message, parse_mode=None):
+        """发送Telegram消息（默认不使用Markdown避免解析错误）"""
         if not self.config.telegram_enabled:
             return
 
@@ -37,15 +37,20 @@ class TelegramNotifier:
             data = {
                 'chat_id': self.config.telegram_chat_id,
                 'text': message,
-                'parse_mode': parse_mode
+                'disable_web_page_preview': True
             }
+
+            # ⭐ 只有明确指定parse_mode时才使用（避免Markdown解析错误）
+            if parse_mode:
+                data['parse_mode'] = parse_mode
 
             resp = requests.post(url, json=data, timeout=10)
 
             if resp.status_code == 200:
                 logger.info(f"[Telegram] 消息已发送")
             else:
-                logger.warning(f"[Telegram] 发送失败: HTTP {resp.status_code}")
+                result = resp.json()
+                logger.warning(f"[Telegram] 发送失败: HTTP {resp.status_code} - {result}")
 
         except Exception as e:
             logger.error(f"[Telegram] 发送消息异常: {e}")
@@ -54,15 +59,15 @@ class TelegramNotifier:
         """通知新信号"""
         # ⭐ 使用北京时间
         now_beijing = get_beijing_time()
-        message = f"""
-🎯 *V7.0.7新信号*
+        # ⭐ 使用纯文本，不用Markdown（避免解析错误）
+        message = f"""🎯 V7.0.7新信号
 
-📊 *信号类型*: {signal_type}
-📈 *置信度*: {confidence:.2f}
-💡 *描述*: {description}
-💰 *当前价格*: ${price:.2f}
-📐 *张力*: {tension:.3f}
-🚀 *加速度*: {acceleration:.3f}
+📊 信号类型: {signal_type}
+📈 置信度: {confidence:.2f}
+💡 描述: {description}
+💰 当前价格: ${price:.2f}
+📐 张力: {tension:.3f}
+🚀 加速度: {acceleration:.3f}
 
 ⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
@@ -73,15 +78,15 @@ class TelegramNotifier:
         # ⭐ 使用北京时间
         now_beijing = get_beijing_time()
         emoji = "📈" if direction == 'long' else "📉"
-        message = f"""
-{emoji} *V7.0.7开仓*
+        # ⭐ 使用纯文本，不用Markdown
+        message = f"""{emoji} V7.0.7开仓
 
-📍 *方向*: {direction.upper()}
-💰 *入场价*: ${price:.2f}
-🎯 *信号*: {signal_type}
-📊 *置信度*: {confidence:.2f}
-🎯 *止盈*: ${tp:.2f}
-🛑 *止损*: ${sl:.2f}
+📍 方向: {direction.upper()}
+💰 入场价: ${price:.2f}
+🎯 信号: {signal_type}
+📊 置信度: {confidence:.2f}
+🎯 止盈: ${tp:.2f}
+🛑 止损: ${sl:.2f}
 
 ⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
@@ -92,14 +97,14 @@ class TelegramNotifier:
         # ⭐ 使用北京时间
         now_beijing = get_beijing_time()
         emoji = "✅" if pnl_pct > 0 else "❌"
-        message = f"""
-{emoji} *V7.0.7平仓*
+        # ⭐ 使用纯文本，不用Markdown
+        message = f"""{emoji} V7.0.7平仓
 
-📍 *方向*: {direction.upper()}
-💰 *入场*: ${entry_price:.2f}
-💵 *出场*: ${exit_price:.2f}
-📊 *盈亏*: {pnl_pct:+.2f}%
-🎯 *原因*: {reason}
+📍 方向: {direction.upper()}
+💰 入场: ${entry_price:.2f}
+💵 出场: ${exit_price:.2f}
+📊 盈亏: {pnl_pct:+.2f}%
+🎯 原因: {reason}
 
 ⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
@@ -118,32 +123,32 @@ class TelegramNotifier:
             else:
                 hold_time_str = "未知"
 
-            message = f"""
-📊 *V7.0.7持仓状态*
+            # ⭐ 使用纯文本，不用Markdown
+            message = f"""📊 V7.0.7持仓状态
 
-📍 *方向*: {self.config.position_type.upper()}
-💰 *入场价*: ${self.config.entry_price:.2f}
-🎯 *止盈*: ${self.config.take_profit_price:.2f}
-🛑 *止损*: ${self.config.stop_loss_price:.2f}
-⏱ *持仓时长*: {hold_time_str}
-📊 *入场置信度*: {self.config.entry_confidence:.2f}
+📍 方向: {self.config.position_type.upper()}
+💰 入场价: ${self.config.entry_price:.2f}
+🎯 止盈: ${self.config.take_profit_price:.2f}
+🛑 止损: ${self.config.stop_loss_price:.2f}
+⏱ 持仓时长: {hold_time_str}
+📊 入场置信度: {self.config.entry_confidence:.2f}
 
-📈 *总交易*: {self.config.total_trades}
-✅ *盈利*: {self.config.winning_trades}
-❌ *亏损*: {self.config.losing_trades}
-💵 *总盈亏*: {self.config.total_pnl:.2f}%
+📈 总交易: {self.config.total_trades}
+✅ 盈利: {self.config.winning_trades}
+❌ 亏损: {self.config.losing_trades}
+💵 总盈亏: {self.config.total_pnl:.2f}%
 
 ⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
         else:
-            message = f"""
-📊 *V7.0.7系统状态*
+            # ⭐ 使用纯文本，不用Markdown
+            message = f"""📊 V7.0.7系统状态
 
-⭕ *当前状态*: 空仓
-📈 *总交易*: {self.config.total_trades}
-✅ *盈利*: {self.config.winning_trades}
-❌ *亏损*: {self.config.losing_trades}
-💵 *总盈亏*: {self.config.total_pnl:.2f}%
+⭕ 当前状态: 空仓
+📈 总交易: {self.config.total_trades}
+✅ 盈利: {self.config.winning_trades}
+❌ 亏损: {self.config.losing_trades}
+💵 总盈亏: {self.config.total_pnl:.2f}%
 
 ⏰ {now_beijing.strftime('%Y-%m-%d %H:%M:%S')} (北京时间)
 """
