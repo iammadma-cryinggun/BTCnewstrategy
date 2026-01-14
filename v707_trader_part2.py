@@ -4,7 +4,7 @@ V7.0.7 主程序 - 第二部分
 包含：Telegram通知、主循环、命令处理
 """
 
-import requests
+import telebot
 from datetime import datetime, timedelta
 import logging
 
@@ -21,39 +21,40 @@ def get_beijing_time():
 
 # ==================== [Telegram通知模块] ====================
 class TelegramNotifier:
-    """Telegram通知和交互模块"""
+    """Telegram通知和交互模块（⭐ 使用telebot库）"""
 
     def __init__(self, config):
         self.config = config
-        self.base_url = f"https://api.telegram.org/bot{config.telegram_token}"
+        self.enabled = config.telegram_enabled
+
+        # ⭐ 使用telebot库（参考SOL系统）
+        if self.enabled and config.telegram_token:
+            try:
+                self.bot = telebot.TeleBot(config.telegram_token)
+                logger.info("[Telegram] TeleBot初始化成功")
+            except Exception as e:
+                logger.error(f"[Telegram] TeleBot初始化失败: {e}")
+                self.bot = None
+                self.enabled = False
+        else:
+            self.bot = None
 
     def send_message(self, message, parse_mode=None):
-        """发送Telegram消息（默认不使用Markdown避免解析错误）"""
-        if not self.config.telegram_enabled:
+        """发送Telegram消息（使用telebot库）"""
+        if not self.enabled or not self.bot:
             return
 
         try:
-            url = f"{self.base_url}/sendMessage"
-            data = {
-                'chat_id': self.config.telegram_chat_id,
-                'text': message,
-                'disable_web_page_preview': True
-            }
-
-            # ⭐ 只有明确指定parse_mode时才使用（避免Markdown解析错误）
-            if parse_mode:
-                data['parse_mode'] = parse_mode
-
-            resp = requests.post(url, json=data, timeout=10)
-
-            if resp.status_code == 200:
-                logger.info(f"[Telegram] 消息已发送")
-            else:
-                result = resp.json()
-                logger.warning(f"[Telegram] 发送失败: HTTP {resp.status_code} - {result}")
-
+            # ⭐ 使用telebot的send_message方法
+            self.bot.send_message(
+                self.config.telegram_chat_id,
+                message,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True
+            )
+            logger.info(f"[Telegram] 消息已发送")
         except Exception as e:
-            logger.error(f"[Telegram] 发送消息异常: {e}")
+            logger.error(f"[Telegram] 发送消息失败: {e}")
 
     def notify_signal(self, signal_type, confidence, description, price, tension, acceleration):
         """通知新信号"""
