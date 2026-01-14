@@ -149,15 +149,24 @@ class V707TradingEngine:
 
             logger.info(f"[V7.0.5过滤器] {filter_reason}")
 
+            # ⭐ 检查是否已有持仓（在标记traded之前）
+            if self.config.has_position:
+                logger.info("已有持仓，忽略新信号")
+                # ⭐ 标记信号被过滤（已有持仓）
+                self.config.signal_history[-1]['filtered'] = True
+                self.config.signal_history[-1]['filter_reason'] = '已有持仓，忽略新信号'
+                self.config.signal_history[-1]['traded'] = False
+                self.notifier.send_message(f"""⏸️ 信号被忽略
+
+📊 信号: {signal_type}
+💰 价格: ${current_price:.2f}
+⏸️ 原因: 已有持仓（{self.config.position_type.upper()} @ ${self.config.entry_price:.2f}）""")
+                return
+
             # ⭐ 标记信号通过过滤器（将交易）
             self.config.signal_history[-1]['filtered'] = False
             self.config.signal_history[-1]['filter_reason'] = filter_reason
             self.config.signal_history[-1]['traded'] = True
-
-            # 检查是否已有持仓
-            if self.config.has_position:
-                logger.info("已有持仓，忽略新信号")
-                return
 
             # 确定入场方向
             direction_map = {
@@ -170,6 +179,9 @@ class V707TradingEngine:
             direction = direction_map.get(signal_type)
             if direction is None:
                 logger.warning(f"未知信号类型: {signal_type}")
+                # ⭐ 未知信号类型，标记为未交易
+                self.config.signal_history[-1]['traded'] = False
+                self.config.signal_history[-1]['filter_reason'] = f'未知信号类型: {signal_type}'
                 return
 
             # 计算止盈止损（使用1H数据）

@@ -398,6 +398,10 @@ class V705EntryFilter:
 
             return True, "通过V7.0.5"
 
+        elif signal_type == 'OSCILLATION':
+            # ⭐ 平衡震荡状态，不交易
+            return False, "系统平衡震荡，无明显趋势"
+
         return True, "通过V7.0.5"
 
 
