@@ -25,8 +25,8 @@ from v707_trader_main import (
     V705EntryFilter,
     V707ZigZagExitManager
 )
-from v707_trader_part2 import TelegramNotifier
-from v707_telegram_handler import start_telegram_listener, get_beijing_time
+from v707_trader_part2 import TelegramNotifier, get_beijing_time
+from v707_telegram_webhook import TelegramWebhookHandler
 
 import logging
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== [V7.0.7 交易引擎] ====================
 class V707TradingEngine:
-    """V7.0.7完整交易引擎"""
+    """V7.0.7完整交易引擎（Webhook模式）"""
 
     def __init__(self):
         self.config = V707TraderConfig()
@@ -42,7 +42,10 @@ class V707TradingEngine:
         self.calculator = PhysicsSignalCalculator(self.config)
         self.filter = V705EntryFilter(self.config)
         self.exit_manager = V707ZigZagExitManager(self.config)
-        self.notifier = TelegramNotifier(self.config)
+
+        # ⭐ Webhook模式：先创建webhandler，再创建notifier
+        self.webhandler = TelegramWebhookHandler(self.config, self)
+        self.notifier = TelegramNotifier(self.config, bot_instance=self.webhandler.bot)
 
         # 加载状态
         self.config.load_state()
@@ -338,9 +341,9 @@ class V707TradingEngine:
             logger.error(f"检查持仓异常: {e}", exc_info=True)
 
     def run(self):
-        """主循环"""
+        """主循环（Webhook模式）"""
         logger.info("=" * 70)
-        logger.info("V7.0.7 智能交易系统启动")
+        logger.info("V7.0.7 智能交易系统启动（Webhook模式）")
         logger.info("=" * 70)
         logger.info(f"Telegram Token: {self.config.telegram_token[:20]}...")
         logger.info(f"Telegram Chat ID: {self.config.telegram_chat_id}")
@@ -350,17 +353,27 @@ class V707TradingEngine:
         # 启动时通知
         self.notifier.notify_status()
 
-        # ⭐ 启动Telegram命令监听器（独立线程）
-        if self.config.telegram_enabled:
+        # ⭐ 启动Flask Webhook服务器（后台线程）
+        if self.config.telegram_enabled and self.webhandler.enabled:
             import threading
-            telegram_thread = threading.Thread(
-                target=start_telegram_listener,
-                args=(self.config, self),
-                daemon=True,
-                name="TelegramListener"
-            )
-            telegram_thread.start()
-            logger.info("[系统] Telegram命令监听器已启动")
+
+            # 从环境变量获取webhook URL
+            webhook_url = os.environ.get('TELEGRAM_WEBHOOK_URL', '')
+            port = int(os.environ.get('PORT', 8080))
+
+            # 如果有webhook URL，设置Telegram webhook
+            if webhook_url:
+                full_webhook_url = f"{webhook_url}/{self.config.telegram_token}"
+                logger.info(f"[系统] 设置Webhook: {full_webhook_url}")
+                self.webhandler.set_webhook(full_webhook_url)
+            else:
+                logger.info("[系统] 未设置Webhook URL，使用Flask服务器模式")
+
+            # 启动Flask服务器（后台线程）
+            flask_thread = self.webhandler.run_flask_threaded(port=port, host='0.0.0.0')
+            logger.info(f"[系统] Flask Webhook服务器已启动（端口 {port}）")
+        else:
+            logger.warning("[系统] Telegram未启用，跳过Webhook启动")
 
         # ⭐ 改为精确的时间调度（北京时间4H K线收盘时间）
         logger.info("定时任务已设置：")

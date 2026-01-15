@@ -11,6 +11,9 @@ requests>=2.26.0
 # Telegram（⭐ 使用telebot库，更稳定）
 pyTelegramBotAPI>=4.0.0
 
+# Webhook服务器（V7.0.7新增）
+Flask>=3.0.0
+
 # 定时任务
 schedule>=1.1.0
 

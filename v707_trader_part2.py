@@ -23,12 +23,16 @@ def get_beijing_time():
 class TelegramNotifier:
     """Telegram通知和交互模块（⭐ 使用telebot库）"""
 
-    def __init__(self, config):
+    def __init__(self, config, bot_instance=None):
         self.config = config
         self.enabled = config.telegram_enabled
 
+        # ⭐ 支持外部传入bot实例（webhook模式）
+        if bot_instance is not None:
+            self.bot = bot_instance
+            logger.info("[Telegram] 使用外部bot实例（webhook模式）")
         # ⭐ 使用telebot库（参考SOL系统）
-        if self.enabled and config.telegram_token:
+        elif self.enabled and config.telegram_token:
             try:
                 self.bot = telebot.TeleBot(config.telegram_token)
                 logger.info("[Telegram] TeleBot初始化成功")
