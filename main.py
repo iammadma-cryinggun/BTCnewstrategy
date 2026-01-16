@@ -17,24 +17,11 @@ if __name__ == "__main__":
     print("[启动] V7.0.7交易系统 - Gunicorn模式")
     print("[启动] 启动Gunicorn生产服务器...")
 
-    # 获取端口
-    port = int(os.environ.get('PORT', 8080))
-
-    # Gunicorn启动命令
-    cmd = [
-        'gunicorn',
-        '-c', 'gunicorn_config.py',
-        'main_production:app',
-        '--bind', f'0.0.0.0:{port}',
-        '--workers', '2',
-        '--timeout', '120',
-        '--access-logfile', '-',
-        '--error-logfile', '-',
-        '--log-level', 'info'
-    ]
+    # Gunicorn启动命令（所有配置都在gunicorn_config.py中）
+    cmd = ['gunicorn', '-c', 'gunicorn_config.py', 'main_production:app']
 
     print(f"[启动] 命令: {' '.join(cmd)}")
-    print(f"[启动] 端口: {port}")
+    print("[启动] 配置文件: gunicorn_config.py")
     print("[启动] 正在启动...")
 
     # 启动Gunicorn（这会阻塞并持续运行）

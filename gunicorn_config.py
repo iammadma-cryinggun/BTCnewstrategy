@@ -12,7 +12,8 @@ bind = "0.0.0.0:8080"
 backlog = 2048
 
 # Worker进程
-workers = multiprocessing.cpu_count() * 2 + 1
+# ⭐ 交易系统必须使用1个worker（避免重复交易）
+workers = 1
 worker_class = "sync"
 worker_connections = 1000
 timeout = 30

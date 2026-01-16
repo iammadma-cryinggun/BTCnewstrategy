@@ -335,8 +335,12 @@ class V707TradingEngine:
         except Exception as e:
             logger.error(f"检查持仓异常: {e}", exc_info=True)
 
-    def run(self):
-        """主循环（Webhook模式）"""
+    def run(self, start_flask=False):
+        """主循环（Webhook模式）
+
+        Args:
+            start_flask: 是否启动Flask服务器（Gunicorn模式下应为False）
+        """
         logger.info("=" * 70)
         logger.info("V7.0.7 智能交易系统启动（Webhook模式）")
         logger.info("=" * 70)
@@ -349,7 +353,7 @@ class V707TradingEngine:
         self.notifier.notify_status()
 
         # ⭐ 启动Flask Webhook服务器（后台线程）
-        if self.config.telegram_enabled and self.webhandler.enabled:
+        if start_flask and self.config.telegram_enabled and self.webhandler.enabled:
             import threading
 
             # 从环境变量获取webhook URL
@@ -368,7 +372,7 @@ class V707TradingEngine:
             flask_thread = self.webhandler.run_flask_threaded(port=port, host='0.0.0.0')
             logger.info(f"[系统] Flask Webhook服务器已启动（端口 {port}）")
         else:
-            logger.warning("[系统] Telegram未启用，跳过Webhook启动")
+            logger.info("[系统] Flask由Gunicorn管理或Telegram未启用，跳过手动启动")
 
         # ⭐ 改为精确的时间调度（北京时间4H K线收盘时间）
         logger.info("定时任务已设置：")

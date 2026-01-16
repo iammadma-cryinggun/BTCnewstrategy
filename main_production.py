@@ -48,6 +48,15 @@ def create_app():
 
     logger.info("[启动] Flask应用已创建")
 
+    # ⭐ 启动交易主循环（后台线程）
+    import threading
+    main_loop_thread = threading.Thread(
+        target=trading_engine.run,
+        daemon=True
+    )
+    main_loop_thread.start()
+    logger.info("[启动] 交易主循环已在后台启动")
+
     return flask_app
 
 
