@@ -133,8 +133,15 @@ class V707TraderConfig:
         self.losing_trades = 0
         self.total_pnl = 0.0
 
-    def save_state(self, filepath='v707_trader_state.json'):
+    def save_state(self, filepath=None):
         """保存系统状态"""
+        # ⭐ 使用持久化存储路径（Zeabur兼容）
+        if filepath is None:
+            persistent_dir = os.environ.get('ZEBUUR_PERSIST_DIR', '/workspace')
+            if not os.path.exists(persistent_dir):
+                persistent_dir = os.getcwd()
+            filepath = os.path.join(persistent_dir, 'v707_trader_state.json')
+
         state = {
             'has_position': self.has_position,
             'position_type': self.position_type,
@@ -164,8 +171,15 @@ class V707TraderConfig:
         except Exception as e:
             logger.error(f"保存状态失败: {e}")
 
-    def load_state(self, filepath='v707_trader_state.json'):
+    def load_state(self, filepath=None):
         """加载系统状态"""
+        # ⭐ 使用持久化存储路径（Zeabur兼容）
+        if filepath is None:
+            persistent_dir = os.environ.get('ZEBUUR_PERSIST_DIR', '/workspace')
+            if not os.path.exists(persistent_dir):
+                persistent_dir = os.getcwd()
+            filepath = os.path.join(persistent_dir, 'v707_trader_state.json')
+
         if not os.path.exists(filepath):
             logger.warning(f"[状态] 状态文件不存在: {filepath}")
             return False

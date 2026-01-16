@@ -118,12 +118,22 @@ V7.0.7特性：
 
                     pnl_emoji = "🟢" if current_pnl_pct > 0 else "🔴"
 
+                    # 计算止盈止损百分比
+                    tp_pct = 0
+                    sl_pct = 0
+                    if self.config.take_profit_price:
+                        tp_pct = (self.config.take_profit_price - self.config.entry_price) / self.config.entry_price * 100
+                    if self.config.stop_loss_price:
+                        sl_pct = (self.config.stop_loss_price - self.config.entry_price) / self.config.entry_price * 100
+
                     status_text = f"""📊 V7.0.7持仓状态
 
 📍 方向: {'📈 做多' if self.config.position_type == 'long' else '📉 做空'}
 💰 入场价: ${self.config.entry_price:.2f}
 💵 当前价: ${current_price:.2f}
 {pnl_emoji} 盈亏: {current_pnl_pct:+.2f}%
+🎯 止盈: ${self.config.take_profit_price:.2f} ({tp_pct:+.2f}%)
+🛑 止损: ${self.config.stop_loss_price:.2f} ({sl_pct:+.2f}%)
 ⏱ 持仓时长: {hold_time:.1f}小时
 📊 入场置信度: {self.config.entry_confidence:.2f}
 

@@ -186,18 +186,13 @@ class V707TradingEngine:
                 self.config.signal_history[-1]['filter_reason'] = f'未知信号类型: {signal_type}'
                 return
 
-            # 计算止盈止损（使用1H数据）
-            df_1h = self.fetcher.fetch_btc_data(interval='1h', limit=300)
-            if df_1h is None:
-                logger.warning("获取1H数据失败，使用回退止盈止损")
-                if direction == 'long':
-                    tp = current_price * 1.05
-                    sl = current_price * 0.975
-                else:
-                    tp = current_price * 0.95
-                    sl = current_price * 1.025
+            # ⭐ 固定止盈止损（V7.0.5模式）
+            if direction == 'long':
+                tp = current_price * 1.05  # +5% 止盈
+                sl = current_price * 0.975  # -2.5% 止损
             else:
-                tp, sl = self.exit_manager.calculate_tp_sl(df_1h, current_price, direction)
+                tp = current_price * 0.95  # -5% 止盈
+                sl = current_price * 1.025  # +2.5% 止损
 
             logger.info(f"[开仓] {direction.upper()} @ ${current_price:.2f}")
             logger.info(f"  止盈: ${tp:.2f} ({(tp/current_price - 1)*100:+.2f}%)")
