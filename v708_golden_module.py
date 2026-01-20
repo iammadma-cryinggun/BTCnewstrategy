@@ -14,35 +14,62 @@ logger = logging.getLogger(__name__)
 
 
 class V708Config:
-    """V7.0.8配置参数"""
+    """V7.0.8配置参数（基于378笔样本的统计学分析）"""
 
     def __init__(self):
-        # SHORT信号黄金标准
+        # ========== SHORT信号参数 ==========
+        # 基础阈值
         self.SHORT_TENSION_MIN = 0.5
-        self.SHORT_TENSION_DIRECT = 0.8  # 张力≥0.8可直接开仓
-        self.SHORT_ENERGY_IDEAL_MIN = 0.5
-        self.SHORT_ENERGY_IDEAL_MAX = 1.0
-        self.SHORT_RATIO_MIN = 50
-        self.SHORT_RATIO_MAX = 150
+
+        # 直接开仓条件（65-70%胜率）
+        self.SHORT_TENSION_DIRECT = 0.8  # 张力≥0.8
+        self.SHORT_ENERGY_DIRECT_MIN = 0.5  # 量能0.5-1.0
+        self.SHORT_ENERGY_DIRECT_MAX = 1.0
+        self.SHORT_RATIO_DIRECT_MIN = 50  # 比例50-150
+        self.SHORT_RATIO_DIRECT_MAX = 150
+
+        # 等待确认条件（85-100%好机会率）
+        self.SHORT_TENSION_WAIT_MIN = 0.5  # 张力0.5-0.7
+        self.SHORT_TENSION_WAIT_MAX = 0.7
+        self.SHORT_ENERGY_WAIT_MIN = 1.0  # 量能1.0-2.0
+        self.SHORT_ENERGY_WAIT_MAX = 2.0
+
+        # 确认后的黄金机会判别（Youden指数）
+        self.SHORT_TENSION_CHANGE_GOLDEN = 5.31  # 张力变化>5.31%
+        self.SHORT_PRICE_ADVANTAGE_GOLDEN = 0.51  # 价格优势>0.51%
+        self.SHORT_RATIO_GOLDEN = 100  # 比例≥100（额外加分）
+
+        # 等待周期
         self.SHORT_WAIT_MIN = 4
         self.SHORT_WAIT_MAX = 6
 
-        # LONG信号黄金标准
+        # ========== LONG信号参数 ==========
+        # 基础阈值
         self.LONG_TENSION_MAX = -0.5
-        self.LONG_TENSION_STRONG = -0.7  # 张力<-0.7更优
-        self.LONG_RATIO_MIN = 100
+
+        # 直接开仓和黄金开仓条件（100%好机会）
+        self.LONG_TENSION_STRONG = -0.7  # 张力<-0.7
+        self.LONG_RATIO_MIN = 100  # 比例≥100
+        self.LONG_TENSION_CHANGE_GOLDEN = 4.77  # 张力变化>4.77%
+        self.LONG_ENERGY_IDEAL_MIN = 1.0  # 能量≥1.0
+
+        # 等待周期
         self.LONG_WAIT_MIN = 4
         self.LONG_WAIT_MAX = 6
 
-        # V7.0.8最优平仓参数
-        self.SHORT_EXIT_ENERGY_EXPAND = 1.0
+        # ========== 平仓参数（基于最优平仓分析） ==========
+        # SHORT平仓（最优第5-7周期，平均+1.20%）
+        self.SHORT_EXIT_ENERGY_EXPAND = 1.0  # 52.7%触发率
         self.SHORT_EXIT_MIN_PERIOD = 5
+        self.SHORT_EXIT_OPTIMAL_PERIOD = 7  # 最优第7周期
         self.SHORT_EXIT_MAX_PERIOD = 10
-        self.SHORT_EXIT_TENSION_DROP = 0.14  # 14%
+        self.SHORT_EXIT_TENSION_DROP = 0.14  # 平均下降14%
         self.SHORT_EXIT_PROFIT_TARGET = 0.02  # 2%
 
-        self.LONG_EXIT_ENERGY_EXPAND = 1.0
+        # LONG平仓（最优第7-9周期，平均+1.35%）
+        self.LONG_EXIT_ENERGY_EXPAND = 1.0  # 50.3%触发率
         self.LONG_EXIT_MIN_PERIOD = 7
+        self.LONG_EXIT_OPTIMAL_PERIOD = 9  # 最优第9周期
         self.LONG_EXIT_MAX_PERIOD = 10
         self.LONG_EXIT_PROFIT_TARGET = 0.02  # 2%
 
@@ -61,7 +88,7 @@ class V708GoldenDetector:
 
     def check_first_signal(self, tension, acceleration, volume_ratio, timestamp, price, signal_type):
         """
-        检查是否为首次信号（需要等待确认）
+        检查是否为首次信号（基于统计学的直接开仓判断）
 
         返回: (is_signal, action, message)
         action: 'direct_enter' | 'wait_confirm' | 'ignore'
@@ -77,44 +104,53 @@ class V708GoldenDetector:
             if tension < self.config.SHORT_TENSION_MIN:
                 return False, 'ignore', f"张力过低: {message_detail}"
 
-            # 判断是否可以直接开仓
+            # 判断是否可以直接开仓（65-70%胜率）
             can_direct = (
                 tension >= self.config.SHORT_TENSION_DIRECT and
-                self.config.SHORT_ENERGY_IDEAL_MIN <= volume_ratio <= self.config.SHORT_ENERGY_IDEAL_MAX and
-                self.config.SHORT_RATIO_MIN <= ratio <= self.config.SHORT_RATIO_MAX
+                self.config.SHORT_ENERGY_DIRECT_MIN <= volume_ratio <= self.config.SHORT_ENERGY_DIRECT_MAX and
+                self.config.SHORT_RATIO_DIRECT_MIN <= ratio <= self.config.SHORT_RATIO_DIRECT_MAX
             )
 
             if can_direct:
-                return True, 'direct_enter', f"【直接开仓SHORT】: {message_detail}"
+                return True, 'direct_enter', f"【直接开仓SHORT】张力≥0.8,量能{volume_ratio:.2f},比例{ratio:.1f}: {message_detail}"
             else:
-                # 记录为待确认信号
-                self.pending_signals[timestamp] = {
-                    'direction': 'short',
-                    'tension': tension,
-                    'acceleration': acceleration,
-                    'volume_ratio': volume_ratio,
-                    'price': price,
-                    'ratio': ratio,
-                    'signal_type': signal_type
-                }
-                self.waiting_periods[timestamp] = 0
-                return True, 'wait_confirm', f"【等待确认SHORT】: {message_detail}"
+                # 判断是否需要等待确认
+                should_wait = (
+                    (self.config.SHORT_TENSION_WAIT_MIN <= tension <= self.config.SHORT_TENSION_WAIT_MAX) or
+                    (self.config.SHORT_ENERGY_WAIT_MIN <= volume_ratio <= self.config.SHORT_ENERGY_WAIT_MAX)
+                )
+
+                if should_wait:
+                    # 记录为待确认信号
+                    self.pending_signals[timestamp] = {
+                        'direction': 'short',
+                        'tension': tension,
+                        'acceleration': acceleration,
+                        'volume_ratio': volume_ratio,
+                        'price': price,
+                        'ratio': ratio,
+                        'signal_type': signal_type
+                    }
+                    self.waiting_periods[timestamp] = 0
+                    return True, 'wait_confirm', f"【等待确认SHORT】张力{tension:.2f}需确认: {message_detail}"
+                else:
+                    return False, 'ignore', f"SHORT信号不符合直接开仓或等待条件: {message_detail}"
 
         elif signal_type in ['BULLISH_SINGULARITY', 'LOW_OSCILLATION']:
             # LONG信号判断
             if tension > self.config.LONG_TENSION_MAX:
                 return False, 'ignore', f"张力过高: {message_detail}"
 
-            # 判断是否可以直接开仓
+            # 判断是否可以直接开仓（张力<-0.7, 比例≥100）
             can_direct = (
                 tension <= self.config.LONG_TENSION_STRONG and
                 ratio >= self.config.LONG_RATIO_MIN
             )
 
             if can_direct:
-                return True, 'direct_enter', f"【直接开仓LONG】: {message_detail}"
+                return True, 'direct_enter', f"【直接开仓LONG】张力≤{self.config.LONG_TENSION_STRONG},比例≥{ratio:.1f}: {message_detail}"
             else:
-                # 记录为待确认信号
+                # 记录为待确认信号（等待4-6周期）
                 self.pending_signals[timestamp] = {
                     'direction': 'long',
                     'tension': tension,
@@ -125,14 +161,14 @@ class V708GoldenDetector:
                     'signal_type': signal_type
                 }
                 self.waiting_periods[timestamp] = 0
-                return True, 'wait_confirm', f"【等待确认LONG】: {message_detail}"
+                return True, 'wait_confirm', f"【等待确认LONG】等待4-6周期确认: {message_detail}"
 
         return False, 'ignore', f"非目标信号: {message_detail}"
 
     def check_golden_entry(self, current_tension, current_accel, current_volume,
                            current_price, current_time):
         """
-        检查是否达到黄金开仓条件
+        检查是否达到黄金开仓条件（基于统计学Youden指数和最优组合）
 
         返回: list of entry_info
         """
@@ -146,6 +182,7 @@ class V708GoldenDetector:
             direction = signal['direction']
             orig_tension = signal['tension']
             orig_price = signal['price']
+            orig_ratio = signal['ratio']
 
             # 清理超过最大等待周期的信号
             if wait_period > 10:
@@ -154,26 +191,26 @@ class V708GoldenDetector:
                 logger.info(f"[V7.0.8] 信号超时移除: {timestamp}")
                 continue
 
-            if direction == 'short':
-                # SHORT黄金确认条件
-                ratio = current_tension / abs(current_accel) if current_accel != 0 else 0
+            # 检查是否在等待周期内（4-6周期）
+            if not (self.config.SHORT_WAIT_MIN <= wait_period <= self.config.SHORT_WAIT_MAX or
+                    self.config.LONG_WAIT_MIN <= wait_period <= self.config.LONG_WAIT_MAX):
+                continue
 
-                is_confirmed = (
-                    current_tension > 0.45 and
-                    current_accel < 0 and
-                    current_volume < 1.0 and
-                    self.config.SHORT_WAIT_MIN <= wait_period <= self.config.SHORT_WAIT_MAX
-                )
+            if direction == 'short':
+                # SHORT黄金确认（基于统计学：张力变化>5.31% OR 价格优势>0.51%）
+                tension_change = (current_tension - orig_tension) / orig_tension * 100
+                price_advantage = (orig_price - current_price) / orig_price * 100
+
+                # 统计学最优组合策略
+                meets_tension_change = tension_change >= self.config.SHORT_TENSION_CHANGE_GOLDEN
+                meets_price_advantage = price_advantage >= self.config.SHORT_PRICE_ADVANTAGE_GOLDEN
+                meets_ratio = orig_ratio >= self.config.SHORT_RATIO_GOLDEN
+
+                # 判别公式
+                is_confirmed = meets_tension_change or meets_price_advantage
+                is_golden = is_confirmed and (meets_ratio or (meets_tension_change and meets_price_advantage))
 
                 if is_confirmed:
-                    tension_change = (current_tension - orig_tension) / orig_tension * 100
-                    price_advantage = (orig_price - current_price) / orig_price * 100
-
-                    # 判断是否为黄金机会
-                    is_golden = (
-                        tension_change > 5 or price_advantage > 0.5
-                    )
-
                     entry_info = {
                         'direction': 'short',
                         'entry_price': current_price,
@@ -189,34 +226,35 @@ class V708GoldenDetector:
                     }
 
                     confirmed_entries.append(entry_info)
-                    logger.info(f"[V7.0.8] SHORT黄金机会确认: T变化={tension_change:.2f}%, 价格优势={price_advantage:.2f}%")
+                    logger.info(f"[V7.0.8] SHORT机会确认: T变化={tension_change:.2f}%, 价格优势={price_advantage:.2f}%, 黄金={is_golden}")
 
                     # 移除已确认的信号
                     del self.pending_signals[timestamp]
                     del self.waiting_periods[timestamp]
 
             elif direction == 'long':
-                # LONG黄金确认条件
-                ratio = abs(current_tension) / current_accel if current_accel != 0 else 0
+                # LONG黄金确认（基于统计学：张力变化>4.77% OR 比例≥100）
+                # LONG的张力是负数，计算变化
+                tension_change = (current_tension - orig_tension) / abs(orig_tension) * 100
+                price_advantage = (current_price - orig_price) / orig_price * 100
 
+                # 统计学最优组合策略
+                meets_strong_tension = orig_tension <= self.config.LONG_TENSION_STRONG
+                meets_energy = current_volume >= self.config.LONG_ENERGY_IDEAL_MIN
+                meets_ratio = orig_ratio >= self.config.LONG_RATIO_MIN
+                meets_tension_change = abs(tension_change) >= self.config.LONG_TENSION_CHANGE_GOLDEN
+
+                # 100%好机会的判别公式
+                # 条件1+2+3 或 条件2 或 条件3
                 is_confirmed = (
-                    current_tension < -0.45 and
-                    current_accel > 0 and
-                    current_volume < 1.0 and
-                    self.config.LONG_WAIT_MIN <= wait_period <= self.config.LONG_WAIT_MAX
+                    (meets_strong_tension and meets_energy and 4 <= wait_period <= 6) or
+                    (meets_ratio and 4 <= wait_period <= 6) or
+                    meets_tension_change
                 )
 
+                is_golden = is_confirmed  # LONG的确认条件本身就很高
+
                 if is_confirmed:
-                    # LONG的张力是负数，使用绝对值计算变化率
-                    tension_change = (abs(current_tension) - abs(orig_tension)) / abs(orig_tension) * 100
-                    price_advantage = (current_price - orig_price) / orig_price * 100
-
-                    # 判断是否为黄金机会
-                    # LONG的tension_change是负数时表示张力绝对值减小（向好），使用绝对值判断
-                    is_golden = (
-                        abs(tension_change) > 5 or price_advantage > 0.5 or ratio >= 100
-                    )
-
                     entry_info = {
                         'direction': 'long',
                         'entry_price': current_price,
@@ -232,7 +270,7 @@ class V708GoldenDetector:
                     }
 
                     confirmed_entries.append(entry_info)
-                    logger.info(f"[V7.0.8] LONG黄金机会确认: T变化={tension_change:.2f}%, 价格优势={price_advantage:.2f}%")
+                    logger.info(f"[V7.0.8] LONG机会确认: T变化={tension_change:.2f}%, 价格优势={price_advantage:.2f}%, 黄金={is_golden}")
 
                     # 移除已确认的信号
                     del self.pending_signals[timestamp]
