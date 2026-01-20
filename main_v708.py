@@ -343,7 +343,7 @@ class V708TradingEngine:
             logger.error(f"开仓异常: {e}", exc_info=True)
 
     def check_position(self):
-        """检查持仓状态（每1小时）- V7.0.7 + V7.0.8黄金平仓"""
+        """检查持仓状态（每1小时）- V7.0.8黄金平仓 + 固定止盈止损"""
         try:
             if not self.config.has_position:
                 return
@@ -351,20 +351,14 @@ class V708TradingEngine:
             logger.info("-" * 70)
             logger.info("检查持仓状态...")
 
-            # 获取1H数据
-            df_1h = self.fetcher.fetch_btc_data(interval='1h', limit=300)
-            if df_1h is None:
-                logger.error("获取1H数据失败")
-                return
-
-            # 获取4H数据
+            # 获取4H数据（只需要4H数据，不需要1H数据）
             df_4h = self.fetcher.fetch_btc_data(interval='4h', limit=300)
             if df_4h is None:
                 logger.error("获取4H数据失败")
                 return
 
-            current_price = df_1h.iloc[-1]['close']
-            current_time = df_1h.index[-1]
+            current_price = df_4h.iloc[-1]['close']
+            current_time = df_4h.index[-1]
             hold_periods = (len(df_4h) - 1) - self.config.entry_index
 
             logger.info(f"持仓时长: {hold_periods}周期 | 当前价格: ${current_price:.2f}")
@@ -376,6 +370,30 @@ class V708TradingEngine:
                 pnl_pct = (self.config.entry_price - current_price) / self.config.entry_price
 
             logger.info(f"当前盈亏: {pnl_pct*100:+.2f}%")
+
+            # ==================== 检查固定止盈止损 ====================
+            tp_hit = False
+            sl_hit = False
+
+            if self.config.position_type == 'long':
+                if current_price >= self.config.take_profit_price:
+                    tp_hit = True
+                    reason = f"固定止盈(+{(self.config.take_profit_price/self.config.entry_price - 1)*100:.1f}%)"
+                elif current_price <= self.config.stop_loss_price:
+                    sl_hit = True
+                    reason = f"固定止损({(self.config.stop_loss_price/self.config.entry_price - 1)*100:.1f}%)"
+            else:  # short
+                if current_price <= self.config.take_profit_price:
+                    tp_hit = True
+                    reason = f"固定止盈(+{(self.config.entry_price/self.config.take_profit_price - 1)*100:.1f}%)"
+                elif current_price >= self.config.stop_loss_price:
+                    sl_hit = True
+                    reason = f"固定止损({(self.config.stop_loss_price/self.config.entry_price - 1)*100:.1f}%)"
+
+            if tp_hit or sl_hit:
+                logger.info(f"[固定止盈止损] {reason}")
+                self._close_position(current_price, reason, pnl_pct, 'fallback')
+                return
 
             # ==================== V7.0.8: 黄金平仓检查 ====================
             position = {
@@ -404,30 +422,6 @@ class V708TradingEngine:
                     logger.info(f"[V7.0.8] 黄金平仓触发: {reason_v708}")
                     self._close_position(current_price, reason_v708, pnl_pct, exit_type_v708)
                     return
-
-            # ==================== V7.0.7: ZigZag出场检查（保留） ====================
-            should_exit, reason, exit_price = self.exit_manager.check_exit(
-                df_1h, self.config.entry_price, self.config.position_type
-            )
-
-            # 超时检查
-            if not should_exit and hold_periods >= self.config.MAX_HOLD_PERIODS:
-                should_exit = True
-                reason = f"超时({hold_periods}周期)"
-                exit_price = current_price
-
-            if should_exit:
-                if exit_price is None:
-                    exit_price = current_price
-
-                # 重新计算盈亏
-                if self.config.position_type == 'long':
-                    pnl_pct = (exit_price - self.config.entry_price) / self.config.entry_price
-                else:
-                    pnl_pct = (self.config.entry_price - exit_price) / self.config.entry_price
-
-                logger.info(f"[V7.0.7] ZigZag/超时平仓: {reason}")
-                self._close_position(exit_price, reason, pnl_pct, 'fallback')
 
         except Exception as e:
             logger.error(f"检查持仓异常: {e}", exc_info=True)
