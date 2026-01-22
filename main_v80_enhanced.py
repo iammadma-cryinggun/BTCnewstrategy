@@ -290,19 +290,20 @@ class V80OptionsEnhanced(V80TradingEngine):
             if len(self.config.signal_history) > 20:
                 self.config.signal_history = self.config.signal_history[-20:]
 
-            # 7. 发送信号通知
-            self.notifier.notify_signal(
-                signal_type, final_confidence, enhanced_description,
-                current_price, tension, acceleration, dxy_fuel
-            )
-
-            # 8. 置信度过滤
+            # 7. 置信度过滤（先过滤，避免不必要的通知）
             if final_confidence < self.config.CONFIDENCE_THRESHOLD:
                 logger.info(f"置信度不足 ({final_confidence:.2f} < {self.config.CONFIDENCE_THRESHOLD})，跳过")
                 self.config.signal_history[-1]['filtered'] = True
                 self.config.signal_history[-1]['filter_reason'] = f'置信度不足: {final_confidence:.2f}'
                 self.config.save_state()
+                logger.info("置信度不足，不发送Telegram通知")
                 return
+
+            # 8. 发送信号通知（只在置信度足够时发送）
+            self.notifier.notify_signal(
+                signal_type, final_confidence, enhanced_description,
+                current_price, tension, acceleration, dxy_fuel
+            )
 
             # 9. 检查是否已有持仓
             if self.config.has_position:

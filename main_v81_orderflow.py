@@ -351,19 +351,20 @@ class V81OrderFlowEnhanced(V80TradingEngine):
             if len(self.config.signal_history) > 20:
                 self.config.signal_history = self.config.signal_history[-20:]
 
-            # 9. 发送信号通知
-            self.notifier.notify_signal(
-                signal_type, final_confidence, enhanced_description,
-                current_price, tension, acceleration, dxy_fuel
-            )
-
-            # 10. 置信度过滤
+            # 9. 置信度过滤（先过滤，避免不必要的通知）
             if final_confidence < self.config.CONFIDENCE_THRESHOLD:
                 logger.info(f"置信度不足 ({final_confidence:.2f} < {self.config.CONFIDENCE_THRESHOLD})，跳过")
                 self.config.signal_history[-1]['filtered'] = True
                 self.config.signal_history[-1]['filter_reason'] = f'置信度不足: {final_confidence:.2f}'
                 self.config.save_state()
+                logger.info("置信度不足，不发送Telegram通知")
                 return
+
+            # 10. 发送信号通知（只在置信度足够时发送）
+            self.notifier.notify_signal(
+                signal_type, final_confidence, enhanced_description,
+                current_price, tension, acceleration, dxy_fuel
+            )
 
             # 11. 检查是否已有持仓
             if self.config.has_position:
@@ -485,30 +486,41 @@ class V81OrderFlowEnhanced(V80TradingEngine):
             self.config.save_state()
 
             # 发送开仓通知
-            message = f"""
-🎯 V8.1 新交易信号（订单流增强版）
+            # 构建消息（避免复杂嵌套）
+            lines = []
+            lines.append("🎯 V8.1 新交易信号（订单流增强版）")
+            lines.append("")
+            lines.append(f"📊 类型: {signal_type}")
+            lines.append(f"📈 描述: {enhanced_description}")
+            lines.append(f"🎯 置信度: {final_confidence:.1%} (基础: {base_confidence:.1%} + 期权: {options_boost:+.1%} + 订单流: {order_flow_boost:+.1%})")
+            lines.append("")
+            lines.append(f"💰 价格: ${current_price:,.2f}")
+            lines.append(f"📊 张力: {tension:.3f} | 加速度: {acceleration:.3f} | DXY: {dxy_fuel:.3f}")
 
-📊 类型: {signal_type}
-📈 描述: {enhanced_description}
-🎯 置信度: {final_confidence:.1%} (基础: {base_confidence:.1%} + 期权: {options_boost:+.1%} + 订单流: {order_flow_boost:+.1%})
+            # 期权数据
+            if options_success and hasattr(self, 'gamma_exposure'):
+                lines.append("")
+                lines.append("📐 期权数据:")
+                lines.append(f"  净Gamma: {self.gamma_exposure['net_gamma_exposure']:.0f}")
+                if hasattr(self, 'max_pain'):
+                    lines.append(f"  最大痛点: ${self.max_pain:,.0f}")
 
-💰 价格: ${current_price:,.2f}
-📊 张力: {tension:.3f} | 加速度: {acceleration:.3f} | DXY: {dxy_fuel:.3f}
+            # 订单流数据
+            if order_flow_success and self.order_flow_data.get('cvd'):
+                lines.append("")
+                lines.append("📊 订单流数据:")
+                cvd = self.order_flow_data['cvd']
+                lines.append(f"  CVD趋势: {cvd['trend']}")
+                lines.append(f"  买入占比: {cvd['buy_ratio']:.1%}")
 
-{'📐 期权数据:' if options_success else ''}
-{'  ' + f'净Gamma: {self.gamma_exposure["net_gamma_exposure"]:.0f}' if options_success and hasattr(self, 'gamma_exposure') else ''}
-{'  ' + f'最大痛点: ${self.max_pain:,.0f}' if options_success and hasattr(self, 'max_pain') else ''}
+            lines.append("")
+            lines.append(f"🚀 方向: {direction.upper()}")
+            lines.append(f"💵 入场: ${current_price:,.2f}")
+            lines.append(f"🛑 止损: ${stop_loss:,.2f} ({(stop_loss/current_price - 1)*100:+.2f}%)")
+            lines.append(f"🎯 止盈: ${take_profit:,.2f} ({(take_profit/current_price - 1)*100:+.2f}%)")
+            lines.append(f"📈 盈亏比: {(abs(take_profit - current_price) / abs(stop_loss - current_price)):.2f}")
 
-{'📊 订单流数据:' if order_flow_success else ''}
-{'  ' + f'CVD趋势: {self.order_flow_data["cvd"]["trend"]}' if order_flow_success and self.order_flow_data.get('cvd') else ''}
-{'  ' + f'买入占比: {self.order_flow_data["cvd"]["buy_ratio"]:.1%}' if order_flow_success and self.order_flow_data.get('cvd') else ''}
-
-🚀 方向: {direction.upper()}
-💵 入场: ${current_price:,.2f}
-🛑 止损: ${stop_loss:,.2f} ({(stop_loss/current_price - 1)*100:+.2f}%)
-🎯 止盈: ${take_profit:,.2f} ({(take_profit/current_price - 1)*100:+.2f}%)
-📈 盈亏比: {(abs(take_profit - current_price) / abs(stop_loss - current_price)):.2f}
-"""
+            message = "\n".join(lines)
             self.notifier.send_message(message)
             logger.info("信号通知已发送")
 
