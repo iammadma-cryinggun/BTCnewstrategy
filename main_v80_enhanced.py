@@ -145,57 +145,112 @@ class V80OptionsEnhanced(V80TradingEngine):
                 from main_v80 import calculate_dxy_fuel
                 dxy_fuel = calculate_dxy_fuel(dxy_history)
 
-            # 3. 期权增强调整
+            # 3. 期权组合策略（增强+确认+否决）
             options_boost = 0.0  # 期权数据对置信度的提升
             options_warning = []  # 期权预警信息
+            options_veto = False  # 期权否决标志
+            nearest_call_wall = None  # 最近的CALL墙（用于调整止盈）
+            nearest_put_wall = None  # 最近的PUT墙（用于调整止损）
 
             if options_success and self.options_data is not None:
-                # A. Gamma暴露调整
+                # A. Vanna挤压检测（优先级最高：风险保护）
+                if hasattr(self, 'vanna_squeeze') and self.vanna_squeeze['is_squeeze']:
+                    squeeze_confidence = self.vanna_squeeze['confidence']
+
+                    if squeeze_confidence > 0.8:
+                        logger.error(f"  ❌ Vanna挤压风险过高({squeeze_confidence:.1%})，期权否决交易")
+                        options_warning.append(f"Vanna挤压({squeeze_confidence:.0%})")
+                        options_veto = True
+                    else:
+                        logger.warning(f"  ⚠️ Vanna挤压风险({squeeze_confidence:.1%})，需要谨慎")
+                        options_warning.append(f"Vanna挤压({squeeze_confidence:.0%})")
+
+                # B. Gamma暴露调整（方案2：增强 + 方案1：确认）
                 if hasattr(self, 'gamma_exposure') and self.gamma_exposure:
                     net_gamma = self.gamma_exposure.get('net_gamma_exposure', 0)
 
-                    # 净Gamma为正 → 做多友好，负 → 做空友好
+                    # 先确定信号方向（需要提前判断）
+                    temp_signal_type, _, _ = classify_market_state(tension, acceleration, dxy_fuel)
+                    temp_direction, _ = self.strategy_map.get(temp_signal_type, ('wait', ''))
+
                     if net_gamma > 0:
-                        # 当前价格被吸引向上
                         logger.info(f"  📐 净Gamma为正({net_gamma:,.0f})，市场多头友好")
-                    else:
-                        # 当前价格被吸引向下
+
+                        # 方案2：增强机制 - Gamma与信号一致时提高置信度
+                        if temp_direction == 'long':
+                            options_boost += 0.10
+                            logger.info(f"  ✅ Gamma支持做多，置信度+10%")
+                        # 方案1：确认机制 - Gamma与信号相反时降低置信度
+                        elif temp_direction == 'short':
+                            options_boost -= 0.20
+                            logger.warning(f"  ⚠️ Gamma反对做空，置信度-20%")
+
+                    elif net_gamma < 0:
                         logger.info(f"  📐 净Gamma为负({net_gamma:,.0f})，市场空头友好")
 
-                # B. 最大痛点磁吸效应
+                        # 方案2：增强机制 - Gamma与信号一致时提高置信度
+                        if temp_direction == 'short':
+                            options_boost += 0.10
+                            logger.info(f"  ✅ Gamma支持做空，置信度+10%")
+                        # 方案1：确认机制 - Gamma与信号相反时降低置信度
+                        elif temp_direction == 'long':
+                            options_boost -= 0.20
+                            logger.warning(f"  ⚠️ Gamma反对做多，置信度-20%")
+
+                # C. 最大痛点磁吸效应
                 if hasattr(self, 'max_pain') and self.max_pain:
                     current_price = df_4h.iloc[-1]['close']
                     distance_to_max_pain = (self.max_pain - current_price) / current_price
 
                     if abs(distance_to_max_pain) < 0.02:  # 2%以内
                         logger.info(f"  🎯 价格接近最大痛点({distance_to_max_pain:.2%})，可能被吸引")
+                        options_warning.append(f"接近最大痛点")
 
-                # C. 订单墙阻挡/支撑
+                # D. 订单墙阻挡/支撑（用于方案4：调整止盈止损）
                 if hasattr(self, 'order_walls') and self.order_walls:
                     current_price = df_4h.iloc[-1]['close']
 
-                    # 找到最近的订单墙
-                    nearest_wall = None
-                    min_distance = float('inf')
-
+                    # 分别找最近的CALL墙和PUT墙
                     for wall in self.order_walls:
                         distance = abs(wall['strike'] - current_price) / current_price
-                        if distance < min_distance:
-                            min_distance = distance
-                            nearest_wall = wall
 
-                    if nearest_wall and min_distance < 0.05:  # 5%以内
-                        if nearest_wall['is_resistance']:
-                            logger.warning(f"  🧱 接近阻力墙${nearest_wall['strike']:,.0f} ({min_distance:.2%})")
-                            options_warning.append(f"阻力墙${nearest_wall['strike']:,.0f}")
-                        else:
-                            logger.info(f"  🧱 接近支撑墙${nearest_wall['strike']:,.0f} ({min_distance:.2%})")
-                            options_warning.append(f"支撑墙${nearest_wall['strike']:,.0f}")
+                        if distance < 0.15:  # 15%以内的墙才考虑
+                            if wall['is_resistance'] and wall['strike'] > current_price:
+                                if nearest_call_wall is None or distance < abs(nearest_call_wall['strike'] - current_price) / current_price:
+                                    nearest_call_wall = wall
+                            elif wall['is_support'] and wall['strike'] < current_price:
+                                if nearest_put_wall is None or distance < abs(nearest_put_wall['strike'] - current_price) / current_price:
+                                    nearest_put_wall = wall
 
-                # D. Vanna挤压风险
-                if hasattr(self, 'vanna_squeeze') and self.vanna_squeeze['is_squeeze']:
-                    logger.warning(f"  ⚠️ Vanna挤压风险! 置信度: {self.vanna_squeeze['confidence']:.1%}")
-                    options_warning.append(f"Vanna挤压({self.vanna_squeeze['confidence']:.0%})")
+                            # 5%以内的墙添加到预警
+                            if distance < 0.05:
+                                if wall['is_resistance']:
+                                    logger.warning(f"  🧱 接近阻力墙${wall['strike']:,.0f} ({distance:.2%})")
+                                    options_warning.append(f"阻力墙${wall['strike']:,.0f}")
+                                else:
+                                    logger.info(f"  🧱 接近支撑墙${wall['strike']:,.0f} ({distance:.2%})")
+                                    options_warning.append(f"支撑墙${wall['strike']:,.0f}")
+
+            # E. 期权否决检查（方案3：保护机制）
+            if options_veto:
+                logger.error("❌ 期权数据强烈反对，取消交易")
+                # 记录被否决的信号
+                signal_record = {
+                    'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+                    'type': signal_type if 'signal_type' in locals() else 'UNKNOWN',
+                    'confidence': 0,
+                    'description': f"{description if 'description' in locals() else ''} | 期权否决",
+                    'price': df_4h.iloc[-1]['close'] if 'df_4h' in locals() else 0,
+                    'tension': tension if 'tension' in locals() else 0,
+                    'acceleration': acceleration if 'acceleration' in locals() else 0,
+                    'dxy_fuel': dxy_fuel if 'dxy_fuel' in locals() else 0,
+                    'traded': False,
+                    'filtered': True,
+                    'filter_reason': '期权否决: Vanna挤压风险过高'
+                }
+                self.config.signal_history.append(signal_record)
+                self.config.save_state()
+                return  # 直接返回，不开仓
 
             # 4. 市场状态分类（基于验证5）
             signal_type, description, base_confidence = classify_market_state(
@@ -281,13 +336,44 @@ class V80OptionsEnhanced(V80TradingEngine):
                                 # 可以考虑降低仓位或者跳过这个信号
                                 # 这里我们选择继续但记录警告
 
-            # 12. 计算止盈止损
+            # 12. 计算止盈止损（方案4：根据订单墙调整）
             if direction == 'long':
                 stop_loss = current_price * 0.97  # -3%
                 take_profit = current_price * 1.10  # +10%
-            else:
+
+                # 根据订单墙调整止盈止损
+                if nearest_call_wall:
+                    # 如果上方有CALL墙，且在原止盈位置之前，则提前止盈
+                    if nearest_call_wall['strike'] < take_profit:
+                        old_tp = take_profit
+                        take_profit = nearest_call_wall['strike'] * 0.99  # 阻力墙之前1%
+                        logger.info(f"  📊 止盈调整: ${old_tp:,.0f} → ${take_profit:,.0f} (阻力墙${nearest_call_wall['strike']:,.0f})")
+
+                if nearest_put_wall:
+                    # 如果下方有PUT墙，且在原止损位置之后，则延后止损（放宽保护）
+                    if nearest_put_wall['strike'] > stop_loss:
+                        old_sl = stop_loss
+                        stop_loss = nearest_put_wall['strike'] * 0.99  # 支撑墙之下1%
+                        logger.info(f"  📊 止损调整: ${old_sl:,.0f} → ${stop_loss:,.0f} (支撑墙${nearest_put_wall['strike']:,.0f})")
+
+            else:  # short
                 stop_loss = current_price * 1.03  # +3%
                 take_profit = current_price * 0.90  # -10%
+
+                # 根据订单墙调整止盈止损
+                if nearest_put_wall:
+                    # 如果下方有PUT墙，且在原止盈位置之前，则提前止盈
+                    if nearest_put_wall['strike'] > take_profit:
+                        old_tp = take_profit
+                        take_profit = nearest_put_wall['strike'] * 1.01  # 支撑墙之上1%
+                        logger.info(f"  📊 止盈调整: ${old_tp:,.0f} → ${take_profit:,.0f} (支撑墙${nearest_put_wall['strike']:,.0f})")
+
+                if nearest_call_wall:
+                    # 如果上方有CALL墙，且在原止损位置之后，则延后止损（放宽保护）
+                    if nearest_call_wall['strike'] < stop_loss:
+                        old_sl = stop_loss
+                        stop_loss = nearest_call_wall['strike'] * 1.01  # 阻力墙之上1%
+                        logger.info(f"  📊 止损调整: ${old_sl:,.0f} → ${stop_loss:,.0f} (阻力墙${nearest_call_wall['strike']:,.0f})")
 
             # 13. 开仓
             self.config.has_position = True
