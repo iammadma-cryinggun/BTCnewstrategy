@@ -1,0 +1,444 @@
+# -*- coding: utf-8 -*-
+"""
+V8.0 + 订单墙期权增强版
+整合Deribit API，获取Gamma、Vanna、订单墙等微观结构数据
+"""
+
+from main_v80 import V80TradingEngine, V80Config, TelegramNotifier, DataFetcher
+from deribit_data_hub import DeribitDataHub
+import logging
+from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+
+class V80OptionsEnhanced(V80TradingEngine):
+    """V8.0期权增强版"""
+
+    def __init__(self):
+        super().__init__()
+        self.deribit_hub = DeribitDataHub()
+        self.options_data = None
+        self.last_options_update = None
+        self.options_update_interval = 3600  # 每小时更新一次期权数据
+
+    def fetch_options_data(self, force: bool = False) -> bool:
+        """
+        获取期权数据
+
+        参数:
+        - force: 是否强制更新
+
+        返回:
+        - success: 是否成功
+        """
+        now = datetime.now()
+
+        # 检查是否需要更新
+        if not force and self.last_options_update:
+            time_since_update = (now - self.last_options_update).total_seconds()
+            if time_since_update < self.options_update_interval:
+                logger.info(f"期权数据刚更新过({time_since_update:.0f}秒前)，跳过")
+                return True
+
+        logger.info("开始获取期权数据...")
+
+        try:
+            # 获取期权摘要
+            raw_data = self.deribit_hub.get_book_summary_by_currency("BTC")
+
+            if not raw_data:
+                logger.warning("获取期权数据失败")
+                return False
+
+            # 解析数据
+            self.options_data = self.deribit_hub.parse_options_data(raw_data)
+
+            if self.options_data.empty:
+                logger.warning("解析期权数据失败")
+                return False
+
+            self.last_options_update = now
+            logger.info(f"期权数据更新成功: {len(self.options_data)} 个合约")
+
+            # 计算关键指标
+            self._calculate_options_indicators()
+
+            return True
+
+        except Exception as e:
+            logger.error(f"获取期权数据异常: {e}")
+            return False
+
+    def _calculate_options_indicators(self):
+        """计算期权指标"""
+        if self.options_data is None or self.options_data.empty:
+            return
+
+        try:
+            # 1. Gamma暴露
+            gamma_exp = self.deribit_hub.calculate_gamma_exposure(self.options_data)
+            self.gamma_exposure = gamma_exp
+
+            # 2. 最大痛点
+            max_pain = self.deribit_hub.find_max_pain(self.options_data)
+            self.max_pain = max_pain
+
+            # 3. 订单墙（使用动态阈值）
+            walls = self.deribit_hub.identify_order_walls(
+                self.options_data,
+                threshold_btc=None,  # 使用动态阈值
+                top_n=10
+            )
+            self.order_walls = walls
+
+            # 4. Vanna挤压检测
+            squeeze = self.deribit_hub.detect_vanna_squeeze(self.options_data)
+            self.vanna_squeeze = squeeze
+
+            # 记录日志
+            logger.info("=" * 70)
+            logger.info("期权微观结构指标:")
+            logger.info(f"  最大痛点: ${self.max_pain:,.0f}")
+            logger.info(f"  净Gamma暴露: {gamma_exp['net_gamma_exposure']:.0f}")
+            logger.info(f"  订单墙数量: {len(walls)}")
+            logger.info(f"  Vanna挤压: {'是' if squeeze['is_squeeze'] else '否'}")
+            if squeeze['is_squeeze']:
+                logger.warning(f"  ⚠️ 挤压置信度: {squeeze['confidence']:.1%}")
+                logger.warning(f"  ⚠️ 原因: {squeeze['reason']}")
+            logger.info("=" * 70)
+
+        except Exception as e:
+            logger.error(f"计算期权指标失败: {e}")
+
+    def check_signals_enhanced(self):
+        """增强版信号检查（整合期权数据到交易决策）"""
+        try:
+            logger.info("=" * 70)
+            logger.info("开始增强版信号检查...")
+
+            # 1. 获取期权数据
+            options_success = self.fetch_options_data()
+
+            # 2. 获取BTC和DXY数据，计算验证5指标
+            df_4h = self.fetcher.fetch_btc_data(interval='4h', limit=300)
+            if df_4h is None:
+                logger.error("获取4H数据失败")
+                return
+
+            logger.info(f"4H K线数据: {len(df_4h)}条")
+
+            from main_v80 import calculate_tension_acceleration_verification5, classify_market_state
+
+            prices = df_4h['close'].values
+            tension, acceleration = calculate_tension_acceleration_verification5(prices)
+
+            if tension is None:
+                logger.error("验证5指标计算失败")
+                return
+
+            # 获取DXY数据
+            dxy_df = self.fetcher.fetch_dxy_data(days_back=30)
+            dxy_fuel = 0.0
+            if dxy_df is not None and len(dxy_df) >= 3:
+                dxy_history = dxy_df['Close'].tolist()
+                from main_v80 import calculate_dxy_fuel
+                dxy_fuel = calculate_dxy_fuel(dxy_history)
+
+            # 3. 期权增强调整
+            options_boost = 0.0  # 期权数据对置信度的提升
+            options_warning = []  # 期权预警信息
+
+            if options_success and self.options_data is not None:
+                # A. Gamma暴露调整
+                if hasattr(self, 'gamma_exposure') and self.gamma_exposure:
+                    net_gamma = self.gamma_exposure.get('net_gamma_exposure', 0)
+
+                    # 净Gamma为正 → 做多友好，负 → 做空友好
+                    if net_gamma > 0:
+                        # 当前价格被吸引向上
+                        logger.info(f"  📐 净Gamma为正({net_gamma:,.0f})，市场多头友好")
+                    else:
+                        # 当前价格被吸引向下
+                        logger.info(f"  📐 净Gamma为负({net_gamma:,.0f})，市场空头友好")
+
+                # B. 最大痛点磁吸效应
+                if hasattr(self, 'max_pain') and self.max_pain:
+                    current_price = df_4h.iloc[-1]['close']
+                    distance_to_max_pain = (self.max_pain - current_price) / current_price
+
+                    if abs(distance_to_max_pain) < 0.02:  # 2%以内
+                        logger.info(f"  🎯 价格接近最大痛点({distance_to_max_pain:.2%})，可能被吸引")
+
+                # C. 订单墙阻挡/支撑
+                if hasattr(self, 'order_walls') and self.order_walls:
+                    current_price = df_4h.iloc[-1]['close']
+
+                    # 找到最近的订单墙
+                    nearest_wall = None
+                    min_distance = float('inf')
+
+                    for wall in self.order_walls:
+                        distance = abs(wall['strike'] - current_price) / current_price
+                        if distance < min_distance:
+                            min_distance = distance
+                            nearest_wall = wall
+
+                    if nearest_wall and min_distance < 0.05:  # 5%以内
+                        if nearest_wall['is_resistance']:
+                            logger.warning(f"  🧱 接近阻力墙${nearest_wall['strike']:,.0f} ({min_distance:.2%})")
+                            options_warning.append(f"阻力墙${nearest_wall['strike']:,.0f}")
+                        else:
+                            logger.info(f"  🧱 接近支撑墙${nearest_wall['strike']:,.0f} ({min_distance:.2%})")
+                            options_warning.append(f"支撑墙${nearest_wall['strike']:,.0f}")
+
+                # D. Vanna挤压风险
+                if hasattr(self, 'vanna_squeeze') and self.vanna_squeeze['is_squeeze']:
+                    logger.warning(f"  ⚠️ Vanna挤压风险! 置信度: {self.vanna_squeeze['confidence']:.1%}")
+                    options_warning.append(f"Vanna挤压({self.vanna_squeeze['confidence']:.0%})")
+
+            # 4. 市场状态分类（基于验证5）
+            signal_type, description, base_confidence = classify_market_state(
+                tension, acceleration, dxy_fuel
+            )
+
+            # 5. 期权增强调整置信度
+            final_confidence = base_confidence + options_boost
+
+            current_price = df_4h.iloc[-1]['close']
+            current_time = df_4h.index[-1]
+
+            # 构建增强描述
+            enhanced_description = description
+            if options_warning:
+                enhanced_description += f" | 期权: {', '.join(options_warning)}"
+
+            logger.info(f"检测到信号: {signal_type} | 置信度: {final_confidence:.2f} (基础:{base_confidence:.2f} + 期权:{options_boost:.2f})")
+            logger.info(f"价格: ${current_price:.2f} | 张力: {tension:.3f} | 加速度: {acceleration:.3f} | DXY燃料: {dxy_fuel:.3f}")
+
+            # 6. 记录信号
+            signal_record = {
+                'time': current_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'type': signal_type,
+                'confidence': final_confidence,
+                'description': enhanced_description,
+                'price': current_price,
+                'tension': tension,
+                'acceleration': acceleration,
+                'dxy_fuel': dxy_fuel,
+                'traded': False,
+                'filtered': False
+            }
+            self.config.signal_history.append(signal_record)
+
+            # 只保留最近20个信号
+            if len(self.config.signal_history) > 20:
+                self.config.signal_history = self.config.signal_history[-20:]
+
+            # 7. 发送信号通知
+            self.notifier.notify_signal(
+                signal_type, final_confidence, enhanced_description,
+                current_price, tension, acceleration, dxy_fuel
+            )
+
+            # 8. 置信度过滤
+            if final_confidence < self.config.CONFIDENCE_THRESHOLD:
+                logger.info(f"置信度不足 ({final_confidence:.2f} < {self.config.CONFIDENCE_THRESHOLD})，跳过")
+                self.config.signal_history[-1]['filtered'] = True
+                self.config.signal_history[-1]['filter_reason'] = f'置信度不足: {final_confidence:.2f}'
+                self.config.save_state()
+                return
+
+            # 9. 检查是否已有持仓
+            if self.config.has_position:
+                logger.info("已有持仓，忽略新信号")
+                self.config.signal_history[-1]['filtered'] = True
+                self.config.signal_history[-1]['filter_reason'] = '已有持仓，忽略新信号'
+                self.notifier.send_message(f"⏸️ 信号被忽略：已有持仓")
+                self.config.save_state()
+                return
+
+            # 10. 确定入场方向（V8.0反向策略）
+            direction, reason = self.strategy_map.get(signal_type, ('wait', '未知状态'))
+
+            if direction == 'wait':
+                logger.info(f"观望状态: {signal_type}")
+                self.config.signal_history[-1]['filtered'] = True
+                self.config.signal_history[-1]['filter_reason'] = f'观望状态: {signal_type}'
+                self.config.save_state()
+                return
+
+            # 11. 检查期权阻挡（如果有强烈阻力墙，降低做空仓位）
+            if options_success and hasattr(self, 'order_walls') and self.order_walls:
+                if direction == 'short':
+                    # 检查是否有强烈的CALL墙在上方
+                    current_price = df_4h.iloc[-1]['close']
+                    for wall in self.order_walls:
+                        if wall['is_resistance'] and wall['strike'] > current_price:
+                            distance = (wall['strike'] - current_price) / current_price
+                            if distance < 0.03:  # 3%以内
+                                logger.warning(f"  ⚠️ 上方有强力CALL墙${wall['strike']:,.0f}，做空风险增加")
+                                # 可以考虑降低仓位或者跳过这个信号
+                                # 这里我们选择继续但记录警告
+
+            # 12. 计算止盈止损
+            if direction == 'long':
+                stop_loss = current_price * 0.97  # -3%
+                take_profit = current_price * 1.10  # +10%
+            else:
+                stop_loss = current_price * 1.03  # +3%
+                take_profit = current_price * 0.90  # -10%
+
+            # 13. 开仓
+            self.config.has_position = True
+            self.config.position_type = direction
+            self.config.entry_price = current_price
+            self.config.stop_loss = stop_loss
+            self.config.take_profit = take_profit
+            self.config.entry_time = datetime.utcnow()
+            self.config.entry_confidence = final_confidence
+            self.config.entry_signal = signal_type
+
+            # 记录交易
+            trade_record = {
+                'entry_time': self.config.entry_time.strftime('%Y-%m-%d %H:%M:%S'),
+                'type': direction,
+                'entry_price': current_price,
+                'signal': signal_type,
+                'confidence': final_confidence
+            }
+            self.config.trade_history.append(trade_record)
+            self.config.signal_history[-1]['traded'] = True
+
+            # 保存状态
+            self.config.save_state()
+
+            # 发送开仓通知
+            self.notifier.notify_open_position(
+                direction, current_price, stop_loss, take_profit,
+                signal_type, final_confidence
+            )
+
+            logger.info(f"✅ 开仓成功: {direction.upper()} @ ${current_price:.2f}")
+            logger.info(f"   止损: ${stop_loss:.2f} | 止盈: ${take_profit:.2f}")
+
+            # 14. 发送期权增强分析
+            if options_success and self.options_data is not None:
+                self._send_enhanced_analysis()
+
+        except Exception as e:
+            logger.error(f"增强版信号检查失败: {e}", exc_info=True)
+
+    def _send_enhanced_analysis(self):
+        """发送增强分析到Telegram"""
+        try:
+            message = "📊 期权微观结构分析:\n\n"
+
+            # 最大痛点
+            if hasattr(self, 'max_pain') and self.max_pain:
+                message += f"🎯 最大痛点: ${self.max_pain:,.0f}\n"
+
+            # Gamma暴露
+            if hasattr(self, 'gamma_exposure') and self.gamma_exposure:
+                net_gamma = self.gamma_exposure.get('net_gamma_exposure', 0)
+                gamma_status = "🟢 做多友好" if net_gamma > 0 else "🔴 做空友好"
+                message += f"📐 净Gamma: {net_gamma:,.0f} {gamma_status}\n"
+
+            # 订单墙
+            if hasattr(self, 'order_walls') and self.order_walls:
+                message += f"\n🧱 订单墙 ({len(self.order_walls)}个):\n"
+                for wall in self.order_walls[:3]:  # 只显示前3个
+                    icon = "🔴" if wall['is_resistance'] else "🟢"
+                    message += f"  {icon} ${wall['strike']:,.0f} - {wall['oi_btc']:.0f} BTC\n"
+
+            # Vanna挤压
+            if hasattr(self, 'vanna_squeeze'):
+                squeeze = self.vanna_squeeze
+                if squeeze['is_squeeze']:
+                    message += f"\n⚠️ Vanna挤压风险 (置信度: {squeeze['confidence']:.1%})\n"
+                    message += f"原因: {squeeze['reason']}\n"
+
+            # 发送通知
+            self.notifier.send_message(message)
+
+        except Exception as e:
+            logger.error(f"发送增强分析失败: {e}")
+
+    def run_enhanced(self):
+        """运行增强版主循环"""
+        logger.info("启动V8.0期权增强版系统...")
+
+        # 启动时更新一次期权数据
+        self.fetch_options_data(force=True)
+
+        # 发送启动通知
+        self.notifier.notify_status()
+
+        logger.info("进入主循环...")
+        logger.info("=" * 70)
+
+        last_signal_check_hour = None
+        last_position_check_hour = None
+        last_options_check_hour = None
+
+        while True:
+            try:
+                # 获取当前北京时间
+                now_beijing = datetime.utcnow() + timedelta(hours=8)
+                current_hour = now_beijing.hour
+                current_minute = now_beijing.minute
+
+                # 信号检查：每4小时 (0:00, 4:00, 8:00, 12:00, 16:00, 20:00)
+                if current_hour % 4 == 0 and current_minute < 5:
+                    if last_signal_check_hour != current_hour:
+                        logger.info(f"[定时] 触发信号检查（{now_beijing.strftime('%H:%M')}）")
+
+                        # 使用增强版信号检查
+                        self.check_signals_enhanced()
+
+                        last_signal_check_hour = current_hour
+
+                # 持仓检查：每1小时
+                if current_minute < 1:
+                    if last_position_check_hour != current_hour:
+                        logger.info(f"[定时] 触发持仓检查（{now_beijing.strftime('%H:%M')}）")
+                        self.check_position()
+                        last_position_check_hour = current_hour
+
+                # 期权数据更新：每1小时
+                if current_minute < 1:
+                    if last_options_check_hour != current_hour:
+                        logger.info(f"[定时] 更新期权数据（{now_beijing.strftime('%H:%M')}）")
+                        self.fetch_options_data(force=True)
+                        last_options_check_hour = current_hour
+
+                # 每秒检查一次
+                import time
+                time.sleep(1)
+
+            except KeyboardInterrupt:
+                logger.info("收到停止信号，正在退出...")
+                break
+            except Exception as e:
+                logger.error(f"主循环异常: {e}", exc_info=True)
+                time.sleep(60)
+
+
+# ==================== 主入口 ====================
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler('v80_enhanced.log', encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+
+    system = V80OptionsEnhanced()
+
+    try:
+        system.run_enhanced()
+    except KeyboardInterrupt:
+        logger.info("程序已停止")
