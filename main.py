@@ -861,6 +861,8 @@ class V80TradingEngine:
 
         # 启动Telegram Polling（后台线程）
         if self.config.telegram_enabled:
+            # 延迟启动，避免容器快速重启导致冲突
+            time.sleep(5)
             telegram_handler = TelegramHandler(self.config, self)
             if telegram_handler.bot:
                 import threading
@@ -887,7 +889,7 @@ class V80TradingEngine:
         last_position_check_hour = None
 
         loop_count = 0
-        heartbeat_interval = 3600  # 每小时打印一次心跳（3600秒）
+        heartbeat_interval = 600  # 每10分钟打印一次心跳（600秒）
 
         while True:
             try:
