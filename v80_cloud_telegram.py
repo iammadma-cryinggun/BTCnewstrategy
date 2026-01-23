@@ -830,8 +830,18 @@ class CloudTradingEngine:
         logging.info("系统启动...")
         logging.info("")
 
+        loop_count = 0
+        heartbeat_interval = 30  # 每30次循环打印一次心跳
+
         try:
             while True:
+                loop_count += 1
+
+                # 心跳日志
+                if loop_count % heartbeat_interval == 0:
+                    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    logging.info(f"♥ [{current_time}] 系统运行中 - 循环次数: {loop_count}")
+
                 self.analyze_and_trade()
                 time.sleep(self.config.CHECK_INTERVAL)
 

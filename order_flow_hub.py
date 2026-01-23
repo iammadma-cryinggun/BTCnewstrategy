@@ -121,6 +121,82 @@ class OrderFlowHub:
             logger.error(f"获取成交数据失败: {e}")
             return None
 
+    def get_extended_trades(self, target_count: int = 10000) -> Optional[pd.DataFrame]:
+        """
+        获取扩展成交数据（循环获取，用于更准确的CVD计算）
+
+        Args:
+            target_count: 目标数据量（默认10000笔，约20分钟数据）
+
+        Returns:
+            DataFrame with columns:
+            - price: 成交价格
+            - qty: 成交数量
+            - time: 成交时间
+            - is_buyer_maker: 是否买方挂单（False=主动买入，True=主动卖出）
+        """
+        all_trades = []
+        end_time = None
+
+        while len(all_trades) < target_count:
+            try:
+                url = f"{self.base_url}/fapi/v1/aggTrades"
+                params = {
+                    'symbol': self.symbol,
+                    'limit': 1000
+                }
+
+                if end_time:
+                    params['endTime'] = int(end_time.timestamp() * 1000)
+
+                response = self.session.get(url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                if not data:
+                    break
+
+                # 转换并添加到列表
+                for trade in data:
+                    trade_dict = {
+                        'price': float(trade['p']),
+                        'qty': float(trade['q']),
+                        'quote_qty': float(trade['p']) * float(trade['q']),
+                        'time': pd.to_datetime(trade['T'], unit='ms'),
+                        'is_buyer_maker': trade['m']
+                    }
+                    all_trades.append(trade_dict)
+
+                # 更新end_time为最早的一笔（用于向前查询）
+                end_time = pd.to_datetime(data[0]['T'], unit='ms')
+
+                logger.info(f"已获取 {len(all_trades)} 笔成交数据...")
+
+                # 如果返回少于1000笔，说明没有更多数据了
+                if len(data) < 1000:
+                    break
+
+                # 避免请求过快
+                import time
+                time.sleep(0.1)
+
+            except Exception as e:
+                logger.error(f"获取扩展成交数据失败: {e}")
+                break
+
+        if not all_trades:
+            return None
+
+        # 转换为DataFrame并按时间排序
+        df = pd.DataFrame(all_trades)
+        df = df.sort_values('time').reset_index(drop=True)
+
+        # 计算时间跨度
+        time_span = df['time'].max() - df['time'].min()
+
+        logger.info(f"✓ 获取扩展成交数据: {len(df)}笔, 时间跨度: {time_span}")
+        return df[['price', 'qty', 'quote_qty', 'time', 'is_buyer_maker']]
+
     def get_liquidations(self, limit: int = 100) -> Optional[List[Dict]]:
         """
         获取清算事件
@@ -372,9 +448,12 @@ class OrderFlowHub:
             logger.error(f"检测大单失败: {e}")
             return []
 
-    def get_order_flow_summary(self) -> Dict:
+    def get_order_flow_summary(self, use_extended_data: bool = True) -> Dict:
         """
         获取订单流综合分析
+
+        Args:
+            use_extended_data: 是否使用扩展数据（默认True，获取10000笔约20分钟）
 
         Returns:
             {
@@ -382,7 +461,8 @@ class OrderFlowHub:
                 'cvd': CVD分析,
                 'order_walls': 订单墙,
                 'whale_trades': 鲸鱼交易,
-                'liquidations': 清算事件
+                'liquidations': 清算事件,
+                'data_info': 数据信息（数据量、时间跨度）
             }
         """
         summary = {}
@@ -392,25 +472,39 @@ class OrderFlowHub:
         orderbook = self.get_orderbook(depth=20)
         summary['orderbook'] = orderbook
 
-        # 2. 获取成交数据
+        # 2. 获取成交数据（使用扩展数据）
         logger.info("正在获取成交数据...")
-        trades_df = self.get_recent_trades(limit=1000)
+        if use_extended_data:
+            logger.info("使用扩展数据模式（目标10000笔，约20分钟）")
+            trades_df = self.get_extended_trades(target_count=10000)
+        else:
+            logger.info("使用快速模式（1000笔，约2分钟）")
+            trades_df = self.get_recent_trades(limit=1000)
 
         # 3. 计算CVD
         if trades_df is not None:
-            cvd = self.calculate_cvd(trades_df, window='5min')
+            # 保存数据信息（在CVD计算之前，因为CVD会修改DataFrame）
+            time_span = trades_df['time'].max() - trades_df['time'].min()
+            summary['data_info'] = {
+                'trade_count': len(trades_df),
+                'time_span': time_span,
+                'time_span_minutes': time_span.total_seconds() / 60
+            }
+
+            # 使用15分钟窗口计算CVD（更稳定）
+            cvd = self.calculate_cvd(trades_df.copy(), window='15min')
             summary['cvd'] = cvd
 
             # 4. 检测鲸鱼交易
             whale_trades = self.detect_whale_trades(trades_df, threshold_usd=1000000)
             summary['whale_trades'] = whale_trades
 
-        # 5. 识别订单墙
+        # 6. 识别订单墙
         if orderbook:
             walls = self.identify_order_walls(orderbook, threshold_pct=0.5)
             summary['order_walls'] = walls
 
-        # 6. 获取清算事件
+        # 7. 获取清算事件
         logger.info("正在获取清算事件...")
         liquidations = self.get_liquidations(limit=100)
         summary['liquidations'] = liquidations
