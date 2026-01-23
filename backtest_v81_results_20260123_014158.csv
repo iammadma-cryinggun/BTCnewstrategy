@@ -1,0 +1,2 @@
+time,signal_type,direction,entry_price,stop_loss,take_profit,base_confidence,order_flow_boost,final_confidence,tension,acceleration,cvd_trend,buy_ratio
+2026-01-16,HIGH_OSCILLATION,short,95589.6,98457.28800000002,86030.64000000001,0.7,0.0,0.7,0.909090909098125,-0.39999999999417923,neutral,0.5552745914503178

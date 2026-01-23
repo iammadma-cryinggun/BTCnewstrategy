@@ -1,0 +1,130 @@
+========================================================================================================================
+CORRECTION COMPARISON REPORT - Before vs After
+========================================================================================================================
+
+========================================================================================================================
+DETAILED COMPARISON - Key Rows File
+========================================================================================================================
+
+========================================================================================================================
+ERROR #1: 2025-09-19 00:00:00
+Signal Type: BULLISH_SINGULARITY
+Issue: BULLISH_SINGULARITY should SHORT (reverse trade)
+========================================================================================================================
+
+Field                BEFORE (Error)                 AFTER (Corrected)              Status
+------------------------------------------------------------------------------------------------------------------------
+Time                 2025-09-19 00:00:00            2025-09-19 00:00:00            -
+Signal Type          BULLISH_SINGULARITY            BULLISH_SINGULARITY            -
+Tension              -1.029625249                   -1.029625249                   -
+Acceleration         0.058001318                    0.058001318                    -
+Volume Ratio         0.6380706630574847             0.6380706630574847             -
+Strategy Status      空仓                             空仓                             -
+Position Type        nan                            nan                            CHANGED
+Action               开多(正常 150%仓位)                  开空(BULLISH反转 150%仓位)           FIXED
+
+                                                      EXPLANATION                                                       
+  BULLISH_SINGULARITY = Bullish Singularity (system sees upside)
+  Strategy = REVERSE TRADE → should SHORT (fade the rally)
+  BEFORE: Incorrectly opened LONG (follows the signal)
+  AFTER:  Correctly opened SHORT (reverses the signal)
+
+========================================================================================================================
+ERROR #2: 2025-12-28 00:00:00
+Signal Type: BULLISH_SINGULARITY
+Issue: BULLISH_SINGULARITY should SHORT (reverse trade)
+========================================================================================================================
+
+Field                BEFORE (Error)                 AFTER (Corrected)              Status
+------------------------------------------------------------------------------------------------------------------------
+Time                 2025-12-28 00:00:00            2025-12-28 00:00:00            -
+Signal Type          BULLISH_SINGULARITY            BULLISH_SINGULARITY            -
+Tension              -0.919430954                   -0.919430954                   -
+Acceleration         0.063990445                    0.063990445                    -
+Volume Ratio         0.4261830718136315             0.4261830718136315             -
+Strategy Status      空仓                             空仓                             -
+Position Type        nan                            nan                            CHANGED
+Action               开多(正常 150%仓位)                  开空(BULLISH反转 150%仓位)           FIXED
+
+                                                      EXPLANATION                                                       
+  BULLISH_SINGULARITY = Bullish Singularity (system sees upside)
+  Strategy = REVERSE TRADE → should SHORT (fade the rally)
+  BEFORE: Incorrectly opened LONG (follows the signal)
+  AFTER:  Correctly opened SHORT (reverses the signal)
+
+========================================================================================================================
+ERROR #3: 2025-12-09 20:00:00
+Signal Type: OSCILLATION
+Issue: OSCILLATION+NO_TRADE should not trade
+========================================================================================================================
+
+Field                BEFORE (Error)                 AFTER (Corrected)              Status
+------------------------------------------------------------------------------------------------------------------------
+Time                 2025-12-09 20:00:00            2025-12-09 20:00:00            -
+Signal Type          OSCILLATION                    OSCILLATION                    -
+Tension              0.050450729                    0.050450729                    -
+Acceleration         0.003346909                    0.003346909                    -
+Volume Ratio         1.2290258248746322             1.2290258248746322             -
+Strategy Status      空仓                             空仓                             -
+Position Type        nan                            nan                            CHANGED
+Action               开多(正常 150%仓位)                  (empty)                        FIXED
+
+                                                      EXPLANATION                                                       
+  OSCILLATION = Sideways/Consolidation market
+  Strategy = NO TRADE (avoid choppy markets)
+  BEFORE: Incorrectly opened position
+  AFTER:  Correctly stayed flat (no action)
+
+========================================================================================================================
+STATISTICS SUMMARY
+========================================================================================================================
+
+[BEFORE CORRECTION]
+------------------------------------------------------------------------------------------------------------------------
+Open LONG:  22
+Open SHORT: 0
+No Action:  47
+
+[AFTER CORRECTION]
+------------------------------------------------------------------------------------------------------------------------
+Open LONG:  19
+Open SHORT: 2
+No Action:  48
+
+[CHANGES]
+------------------------------------------------------------------------------------------------------------------------
+Open LONG:  22 → 19 (-3)
+Open SHORT: 0 → 2 (+2)
+No Action:  47 → 48 (+1)
+
+========================================================================================================================
+STRATEGY COMPLIANCE CHECK
+========================================================================================================================
+
+Checking if all signals now follow the correct strategy logic...
+------------------------------------------------------------------------------------------------------------------------
+
+OK BEARISH_SINGULARITY -> LONG: 18 (correct)
+OK BULLISH_SINGULARITY -> SHORT: 2 (correct)
+OK OSCILLATION -> NO TRADE: 4 (correct)
+OK LOW_OSCILLATION -> LONG: 1 (correct)
+
+========================================================================================================================
+CORRECTION SUMMARY
+========================================================================================================================
+
+Total Errors Fixed: 3
+  - BULLISH_SINGULARITY incorrectly LONG → Now SHORT: 2
+  - OSCILLATION incorrectly traded → Now NO ACTION: 1
+
+Files Generated:
+  1. 带信号标记_关键行_修复版.csv (13KB)
+  2. 带信号标记_完整数据_修复版.csv (116KB)
+  3. fix_csv_errors.py (correction script)
+
+Strategy Compliance: 100% OK
+All signals now follow the V8.0 reverse strategy logic correctly.
+
+========================================================================================================================
+REPORT COMPLETE
+========================================================================================================================
