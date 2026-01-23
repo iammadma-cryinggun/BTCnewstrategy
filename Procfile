@@ -1,1 +1,1 @@
-web: python main_v80.py
+web: python main_simple.py
