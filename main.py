@@ -578,6 +578,15 @@ class V80TradingEngine:
         self.fetcher = DataFetcher()
         self.notifier = TelegramNotifier(self.config)
 
+        # 初始化订单流数据中心
+        try:
+            from order_flow_hub import OrderFlowHub
+            self.order_flow = OrderFlowHub()
+            logging.info("[订单流] 数据中心初始化成功")
+        except Exception as e:
+            logging.warning(f"[订单流] 初始化失败: {e}")
+            self.order_flow = None
+
         # 加载状态
         self.config.load_state()
 
@@ -898,13 +907,38 @@ class V80TradingEngine:
                 # 获取当前北京时间
                 now_beijing = datetime.utcnow() + timedelta(hours=8)
 
-                # 心跳日志（每小时一次）
+                # 心跳日志（每10分钟一次）- 显示数据采集状态
                 if loop_count % heartbeat_interval == 0:
                     current_time_str = now_beijing.strftime('%Y-%m-%d %H:%M:%S')
-                    logging.info(f"♥ [{current_time_str}] 系统运行中 - 循环次数: {loop_count:,}")
-                    logging.info(f"  当前持仓: {'有' if self.config.has_position else '无'}")
-                    logging.info(f"  历史信号数: {len(self.config.signal_history)}")
-                    logging.info(f"  历史交易数: {self.config.total_trades}")
+                    logging.info(f"♥ [{current_time_str}] 数据采集中...")
+
+                    # 获取当前BTC价格
+                    try:
+                        df = self.fetcher.fetch_btc_data(interval='1m', limit=1)
+                        if df is not None and len(df) > 0:
+                            current_price = df.iloc[-1]['close']
+                            logging.info(f"  BTC价格: ${current_price:,.2f}")
+                    except:
+                        logging.info(f"  BTC价格: 获取失败")
+
+                    # 订单流数据状态
+                    if self.order_flow:
+                        try:
+                            # 获取最近成交数据
+                            trades_df = self.order_flow.get_recent_trades(limit=100)
+                            if trades_df is not None and len(trades_df) > 0:
+                                buy_vol = trades_df[trades_df['is_buyer_maker'] == False]['qty'].sum()
+                                sell_vol = trades_df[trades_df['is_buyer_maker'] == True]['qty'].sum()
+                                cvd = buy_vol - sell_vol
+                                logging.info(f"  订单流: 最近100笔 | 买量: {buy_vol:.1f}BTC | 卖量: {sell_vol:.1f}BTC | CVD: {cvd:+.1f}")
+                            else:
+                                logging.info(f"  订单流: 数据获取中...")
+                        except Exception as e:
+                            logging.info(f"  订单流: 暂无数据")
+                    else:
+                        logging.info(f"  订单流: 未启用")
+
+                    logging.info(f"  运行时长: {loop_count:,}秒 | 上次检查: {last_signal_check_hour or '未执行'}时")
                 current_hour = now_beijing.hour
                 current_minute = now_beijing.minute
 
