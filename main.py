@@ -38,9 +38,9 @@ class V80Config:
     """V8.0配置管理"""
 
     def __init__(self):
-        # Telegram配置
-        self.telegram_token = os.environ.get('TELEGRAM_TOKEN', '8505180201:AAGOSkhXHRu77OlRMu0PZCbKtYMEr1tRGAk')
-        self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '838429342')
+        # Telegram配置（从环境变量读取，不使用硬编码）
+        self.telegram_token = os.environ.get('TELEGRAM_TOKEN', '')
+        self.telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
         self.telegram_enabled = bool(self.telegram_token and self.telegram_chat_id)
 
         # 验证5参数
