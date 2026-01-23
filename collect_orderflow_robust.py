@@ -31,6 +31,107 @@ class RobustOrderFlowCollector:
         self.max_retries = 3
         self.retry_delay = 5
 
+    def fetch_orderbook(self, timestamp=None, depth=20):
+        """
+        获取订单簿深度数据（用于订单墙分析）
+
+        注意：Binance API不支持历史订单簿查询，只能获取当前订单簿
+        这里我们记录获取订单簿的时间点，用于后续回测时的近似分析
+
+        Args:
+            timestamp: 时间戳（仅用于记录，无法获取历史订单簿）
+            depth: 深度档位（5, 10, 20）
+
+        Returns:
+            dict: 订单簿数据
+        """
+        url = f"{self.base_url}/fapi/v1/depth"
+        params = {
+            'symbol': self.symbol,
+            'limit': depth
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            # 解析订单簿
+            bids = [[float(price), float(qty)] for price, qty in data['bids']]
+            asks = [[float(price), float(qty)] for price, qty in data['asks']]
+
+            return {
+                'bids': bids,
+                'asks': asks,
+                'timestamp': datetime.now()  # 记录当前时间
+            }
+
+        except Exception as e:
+            logger.warning(f"获取订单簿失败: {e}")
+            return None
+
+    def analyze_order_walls(self, orderbook):
+        """
+        分析订单簿，识别订单墙
+
+        Args:
+            orderbook: 订单簿数据
+
+        Returns:
+            dict: 订单墙分析结果
+        """
+        if orderbook is None:
+            return None
+
+        try:
+            bids = orderbook['bids']
+            asks = orderbook['asks']
+
+            if not bids or not asks:
+                return None
+
+            # 计算当前中间价
+            current_price = (bids[0][0] + asks[0][0]) / 2
+
+            # 计算平均挂单量
+            all_qty = [qty for _, qty in bids + asks]
+            avg_qty = np.mean(all_qty) if all_qty else 0
+            threshold = avg_qty * 1.5  # 订单墙门槛 = 平均值的1.5倍
+
+            # 识别支撑墙（买盘大单）
+            support_walls = []
+            for price, qty in bids[:10]:  # 只看前10档
+                if qty >= threshold:
+                    distance = (price - current_price) / current_price * 100
+                    support_walls.append({
+                        'price': price,
+                        'qty': qty,
+                        'distance_pct': distance
+                    })
+
+            # 识别阻力墙（卖盘大单）
+            resistance_walls = []
+            for price, qty in asks[:10]:  # 只看前10档
+                if qty >= threshold:
+                    distance = (price - current_price) / current_price * 100
+                    resistance_walls.append({
+                        'price': price,
+                        'qty': qty,
+                        'distance_pct': distance
+                    })
+
+            return {
+                'current_price': current_price,
+                'support_walls': support_walls,
+                'resistance_walls': resistance_walls,
+                'avg_qty': avg_qty,
+                'threshold': threshold
+            }
+
+        except Exception as e:
+            logger.error(f"分析订单墙失败: {e}")
+            return None
+
     def fetch_historical_trades(self, start_time, end_time, limit=1000):
         """
         获取历史成交数据（带重试机制）
@@ -172,6 +273,108 @@ class RobustOrderFlowCollector:
 
         return whale_trades
 
+    def generate_order_walls_from_trades(self, trades_df, cvd_df, window='5min'):
+        """
+        从历史成交数据推断订单墙（支撑/阻力）
+
+        逻辑：
+        1. 在每个时间窗口，分析价格成交分布
+        2. 成交量大的价格级别 = 潜在的订单墙位置
+        3. 结合CVD趋势判断墙的强度
+
+        Args:
+            trades_df: 历史成交数据
+            cvd_df: CVD数据
+            window: 时间窗口
+
+        Returns:
+            DataFrame: 订单墙数据
+        """
+        if trades_df is None or trades_df.empty:
+            return None
+
+        logger.info(f"  推断订单墙（窗口: {window}）...")
+
+        trades_df_copy = trades_df.copy()
+        trades_df_copy.set_index('time', inplace=True)
+
+        # 按时间窗口聚合成交数据
+        resampled = trades_df_copy.resample(window)
+
+        walls_list = []
+
+        for timestamp, group in resampled:
+            if len(group) == 0:
+                continue
+
+            # 计算价格成交分布
+            price_dist = group.groupby('price')['quote_qty'].sum().sort_values(ascending=False)
+
+            if len(price_dist) == 0:
+                continue
+
+            # 找出成交量最大的价格级别（前3个）
+            top_levels = price_dist.head(3)
+            avg_qty = price_dist.mean()
+            current_price = group['price'].iloc[-1]  # 使用最后成交价作为当前价
+
+            # 识别支撑墙（下方大成交量）
+            support_walls = []
+            for price, qty in top_levels.items():
+                if price < current_price and qty > avg_qty * 1.5:
+                    support_walls.append({
+                        'price': price,
+                        'volume': qty,
+                        'distance_pct': (price - current_price) / current_price * 100
+                    })
+
+            # 识别阻力墙（上方大成交量）
+            resistance_walls = []
+            for price, qty in top_levels.items():
+                if price > current_price and qty > avg_qty * 1.5:
+                    resistance_walls.append({
+                        'price': price,
+                        'volume': qty,
+                        'distance_pct': (price - current_price) / current_price * 100
+                    })
+
+            # 获取对应的CVD数据
+            if cvd_df is not None and not cvd_df.empty:
+                cvd_row = cvd_df[cvd_df.index == timestamp]
+                if not cvd_row.empty:
+                    cvd_value = cvd_row['cvd'].values[0]
+                    buy_ratio = cvd_row['buy_ratio'].values[0]
+                    trend = cvd_row['trend'].values[0]
+                else:
+                    cvd_value = 0
+                    buy_ratio = 0.5
+                    trend = 'neutral'
+            else:
+                cvd_value = 0
+                buy_ratio = 0.5
+                trend = 'neutral'
+
+            walls_list.append({
+                'time': timestamp,
+                'current_price': current_price,
+                'support_walls_count': len(support_walls),
+                'resistance_walls_count': len(resistance_walls),
+                'nearest_support_price': support_walls[0]['price'] if support_walls else None,
+                'nearest_support_distance': support_walls[0]['distance_pct'] if support_walls else None,
+                'nearest_resistance_price': resistance_walls[0]['price'] if resistance_walls else None,
+                'nearest_resistance_distance': resistance_walls[0]['distance_pct'] if resistance_walls else None,
+                'cvd': cvd_value,
+                'buy_ratio': buy_ratio,
+                'trend': trend
+            })
+
+        if walls_list:
+            walls_df = pd.DataFrame(walls_list)
+            logger.info(f"  推断完成: {len(walls_df)} 个时间点")
+            return walls_df
+        else:
+            return None
+
     def collect_single_day(self, date_str, output_dir='./historical_data'):
         """
         收集单天的数据
@@ -219,12 +422,22 @@ class RobustOrderFlowCollector:
             whale_df.to_csv(whale_file, index=False)
             logger.info(f"  ✓ 已保存: {whale_file}")
 
+        # 5. 生成订单墙数据（从成交数据推断）
+        logger.info(f"  生成订单墙数据...")
+        walls_df = self.generate_order_walls_from_trades(trades_df, cvd_df)
+
+        if walls_df is not None:
+            walls_file = f"{output_dir}/order_walls_{date_str}.csv"
+            walls_df.to_csv(walls_file, index=False)
+            logger.info(f"  ✓ 已保存: {walls_file} ({len(walls_df)} 个时间点)")
+
         logger.info(f"  ✅ {date_str} 收集完成")
 
         return {
             'trades': trades_df,
             'cvd': cvd_df,
-            'whale': whale_df
+            'whale': whale_df,
+            'walls': walls_df if walls_df is not None else None
         }
 
     def collect_multiple_days(self, start_date, end_date, output_dir='./historical_data'):
@@ -302,6 +515,14 @@ class RobustOrderFlowCollector:
                 merged_whale_file = f"{output_dir}/whale_trades_{start_date}_{end_date}.csv"
                 all_whale.to_csv(merged_whale_file, index=False)
                 logger.info(f"  ✓ 已保存: {merged_whale_file}")
+
+            if results[0]['walls'] is not None:
+                all_walls = pd.concat([r['walls'] for r in results if r['walls'] is not None], ignore_index=True)
+                logger.info(f"  合并订单墙数据: {len(all_walls)} 个时间点")
+
+                merged_walls_file = f"{output_dir}/order_walls_{start_date}_{end_date}.csv"
+                all_walls.to_csv(merged_walls_file, index=False)
+                logger.info(f"  ✓ 已保存: {merged_walls_file}")
 
             logger.info("\n✅ 所有数据收集完成！")
 

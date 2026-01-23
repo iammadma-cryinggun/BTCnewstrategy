@@ -328,9 +328,9 @@ class TelegramNotifier:
         except Exception as e:
             logging.error(f"[Telegram] 发送消息失败: {e}")
 
-    def notify_signal(self, signal_type, confidence, description, price, tension, acceleration, dxy_fuel=0.0):
-        """发送信号通知"""
-        message = f"""🎯 V8.0 新交易信号
+    def notify_signal(self, signal_type, confidence, description, price, tension, acceleration, dxy_fuel=0.0, cvd_data="", whale_data=""):
+        """发送信号通知（V8.1 订单流增强版）"""
+        message = f"""🎯 V8.1 新交易信号（订单流增强版）
 
 📊 类型: {signal_type}
 📈 描述: {description}
@@ -340,7 +340,17 @@ class TelegramNotifier:
 📐 张力: {tension:.3f}
 📐 加速度: {acceleration:.3f}
 ⛽ DXY燃料: {dxy_fuel:.3f}
-
+"""
+        if cvd_data:
+            message += f"""
+📊 订单流数据:
+{cvd_data}
+"""
+        if whale_data:
+            message += f"""
+🐋 {whale_data}
+"""
+        message += f"""
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
         self.send_message(message)
@@ -642,19 +652,119 @@ class V80TradingEngine:
             logging.info(f"检测到信号: {signal_type} | 置信度: {confidence:.2f} | {description}")
             logging.info(f"价格: ${current_price:.2f} | 张力: {tension:.3f} | 加速度: {acceleration:.3f} | DXY燃料: {dxy_fuel:.3f}")
 
-            # 记录信号到历史
+            # ========== V8.1 订单流增强 ==========
+            # 1. CVD和鲸鱼交易确认
+            base_confidence = confidence
+            cvd_boost = 0.0
+            whale_boost = 0.0
+            cvd_data_str = ""
+            whale_data_str = ""
+            cvd_trend = 'neutral'
+
+            if self.order_flow:
+                try:
+                    # 获取CVD数据
+                    orderbook = self.order_flow.get_orderbook()
+                    recent_trades = self.order_flow.get_recent_trades(limit=1000)
+
+                    # 计算CVD
+                    if recent_trades is not None and len(recent_trades) > 0:
+                        buy_vol = recent_trades[~recent_trades['is_buyer_maker']]['qty'].sum()
+                        sell_vol = recent_trades[recent_trades['is_buyer_maker']]['qty'].sum()
+                        cvd = buy_vol - sell_vol
+                        total_vol = buy_vol + sell_vol
+                        buy_ratio = buy_vol / total_vol if total_vol > 0 else 0.5
+
+                        # 判断CVD趋势
+                        if cvd > 0 and buy_ratio > 0.6:
+                            cvd_trend = 'bullish'
+                        elif cvd < 0 and buy_ratio < 0.4:
+                            cvd_trend = 'bearish'
+                        else:
+                            cvd_trend = 'neutral'
+
+                        cvd_data_str = f"CVD: {cvd:,.0f} USD | 买入比: {buy_ratio:.1%} | 趋势: {cvd_trend}"
+                        logging.info(f"[订单流] {cvd_data_str}")
+
+                    # 检测鲸鱼交易（>$1M）
+                    whale_trades = recent_trades[recent_trades['quote_qty'] >= 1000000]
+                    if len(whale_trades) > 0:
+                        whale_buy_vol = whale_trades[~whale_trades['is_buyer_maker']]['quote_qty'].sum()
+                        whale_sell_vol = whale_trades[whale_trades['is_buyer_maker']]['quote_qty'].sum()
+
+                        whale_data_str = f"鲸鱼: {len(whale_trades)}笔 | 买: ${whale_buy_vol/1000000:.1f}M | 卖: ${whale_sell_vol/1000000:.1f}M"
+                        logging.info(f"[订单流] {whale_data_str}")
+
+                        # 鲸鱼交易确认
+                        if whale_buy_vol > whale_sell_vol * 2:
+                            whale_boost += 0.05
+                            logging.info(f"[订单流] ✅ 鲸鱼大量买入，置信度+5%")
+                        elif whale_sell_vol > whale_buy_vol * 2:
+                            whale_boost -= 0.05
+                            logging.info(f"[订单流] ⚠️ 鲸鱼大量卖出，置信度-5%")
+
+                    # CVD确认机制（根据方向和CVD趋势调整置信度）
+                    # 先确定方向
+                    direction_map = {
+                        'BEARISH_SINGULARITY': ('short', '反向抄底'),
+                        'BULLISH_SINGULARITY': ('long', '反向逃顶'),
+                        'LOW_OSCILLATION': ('long', '低位做多'),
+                        'HIGH_OSCILLATION': ('short', '高位做空'),
+                        'OSCILLATION': ('wait', '震荡观望'),
+                        'TRANSITION_UP': ('wait', '向上过渡'),
+                        'TRANSITION_DOWN': ('wait', '向下过渡'),
+                        'TRANSITION': ('wait', '体制切换'),
+                    }
+                    direction, _ = direction_map.get(signal_type, ('wait', '未知'))
+
+                    if direction == 'long':
+                        # 做多信号 + CVD看涨 → 增强
+                        if cvd_trend == 'bullish' and buy_ratio > 0.6:
+                            cvd_boost += 0.05
+                            logging.info(f"[订单流] ✅ CVD看涨+买入比高，置信度+5%")
+                        # 做多信号 + CVD看跌 → 减弱（强烈警告）
+                        elif cvd_trend == 'bearish' and buy_ratio < 0.4:
+                            cvd_boost -= 0.10
+                            logging.info(f"[订单流] ⚠️ CVD看跌+买入比低，置信度-10%")
+
+                    elif direction == 'short':
+                        # 做空信号 + CVD看跌 → 增强
+                        if cvd_trend == 'bearish' and buy_ratio < 0.4:
+                            cvd_boost += 0.05
+                            logging.info(f"[订单流] ✅ CVD看跌+买入比低，置信度+5%")
+                        # 做空信号 + CVD看涨 → 减弱（强烈警告）
+                        elif cvd_trend == 'bullish' and buy_ratio > 0.6:
+                            cvd_boost -= 0.10
+                            logging.info(f"[订单流] ⚠️ CVD看涨+买入比高，置信度-10%")
+
+                except Exception as e:
+                    logging.warning(f"[订单流] 获取数据失败: {e}")
+
+            # 应用订单流调整
+            final_confidence = base_confidence + cvd_boost + whale_boost
+            final_confidence = max(0, min(final_confidence, 1.0))
+
+            if cvd_boost != 0 or whale_boost != 0:
+                logging.info(f"[订单流] 基础置信度: {base_confidence:.2f} | 调整: {cvd_boost:+.2f} (CVD) + {whale_boost:+.2f} (鲸鱼) = {final_confidence:.2f}")
+
+            # 更新信号记录
             signal_record = {
                 'time': current_time.strftime('%Y-%m-%d %H:%M:%S'),
                 'type': signal_type,
-                'confidence': confidence,
+                'confidence': final_confidence,
+                'base_confidence': base_confidence,
                 'description': description,
                 'price': current_price,
                 'tension': tension,
                 'acceleration': acceleration,
                 'dxy_fuel': dxy_fuel,
+                'cvd_data': cvd_data_str,
+                'whale_data': whale_data_str,
                 'traded': False,
                 'filtered': False
             }
+            # =========================================
+
             self.config.signal_history.append(signal_record)
 
             # 只保留最近20个信号
@@ -663,15 +773,16 @@ class V80TradingEngine:
 
             # 发送信号通知（所有信号都发送）
             self.notifier.notify_signal(
-                signal_type, confidence, description,
-                current_price, tension, acceleration, dxy_fuel
+                signal_type, final_confidence, description,
+                current_price, tension, acceleration, dxy_fuel,
+                cvd_data_str, whale_data_str
             )
 
-            # 置信度过滤
-            if confidence < self.config.CONFIDENCE_THRESHOLD:
-                logging.info(f"置信度不足 ({confidence:.2f} < {self.config.CONFIDENCE_THRESHOLD})，跳过")
+            # 置信度过滤（使用调整后的final_confidence）
+            if final_confidence < self.config.CONFIDENCE_THRESHOLD:
+                logging.info(f"置信度不足 ({final_confidence:.2f} < {self.config.CONFIDENCE_THRESHOLD})，跳过")
                 self.config.signal_history[-1]['filtered'] = True
-                self.config.signal_history[-1]['filter_reason'] = f'置信度不足: {confidence:.2f}'
+                self.config.signal_history[-1]['filter_reason'] = f'置信度不足: {final_confidence:.2f}'
                 self.config.save_state()
                 return
 
@@ -694,6 +805,65 @@ class V80TradingEngine:
                 self.config.save_state()
                 return
 
+            # 订单墙检查（如果可用）
+            wall_filter_result = None
+            if self.order_flow:
+                try:
+                    orderbook = self.order_flow.get_orderbook()
+                    if orderbook:
+                        walls = self.order_flow.identify_order_walls(orderbook, threshold_pct=0.5)
+
+                        if walls:
+                            support_walls = walls.get('support_walls', [])
+                            resistance_walls = walls.get('resistance_walls', [])
+
+                            # 订单墙过滤逻辑
+                            should_filter = False
+                            filter_reason = ""
+
+                            if direction == 'long':
+                                # 做多：检查上方是否有强阻力墙
+                                if resistance_walls:
+                                    nearest_resistance = resistance_walls[0]
+                                    resistance_distance = nearest_resistance['distance']
+
+                                    # 如果阻力墙在1%以内，过滤做多信号
+                                    if 0 < resistance_distance <= 0.01:  # 1%以内
+                                        should_filter = True
+                                        filter_reason = f"上方阻力墙太近: {nearest_resistance['price']:,.0f} ({resistance_distance*100:.2f}%)"
+                                        logging.info(f"[订单墙过滤] {filter_reason}")
+
+                            elif direction == 'short':
+                                # 做空：检查下方是否有强支撑墙
+                                if support_walls:
+                                    nearest_support = support_walls[0]
+                                    support_distance = abs(nearest_support['distance'])
+
+                                    # 如果支撑墙在1%以内，过滤做空信号
+                                    if 0 < support_distance <= 0.01:  # 1%以内
+                                        should_filter = True
+                                        filter_reason = f"下方支撑墙太近: {nearest_support['price']:,.0f} ({support_distance*100:.2f}%)"
+                                        logging.info(f"[订单墙过滤] {filter_reason}")
+
+                            if should_filter:
+                                self.config.signal_history[-1]['filtered'] = True
+                                self.config.signal_history[-1]['filter_reason'] = f'订单墙过滤: {filter_reason}'
+                                self.notifier.send_message(f"🚫 信号被订单墙过滤：{filter_reason}")
+                                self.config.save_state()
+                                return
+
+                            # 记录订单墙信息（用于后续分析）
+                            wall_filter_result = {
+                                'support_count': len(support_walls),
+                                'resistance_count': len(resistance_walls),
+                                'nearest_support': support_walls[0]['price'] if support_walls else None,
+                                'nearest_resistance': resistance_walls[0]['price'] if resistance_walls else None
+                            }
+                            logging.info(f"[订单墙] 支撑:{len(support_walls)}个 | 阻力:{len(resistance_walls)}个")
+
+                except Exception as e:
+                    logging.warning(f"[订单墙] 检查失败: {e}")
+
             # 计算止盈止损
             if direction == 'long':
                 stop_loss = current_price * 0.97  # -3%
@@ -702,11 +872,42 @@ class V80TradingEngine:
                 stop_loss = current_price * 1.03  # +3%
                 take_profit = current_price * 0.90  # -10%
 
+            # ========== V8.1 订单流墙优化止盈止损 ==========
+            if self.order_flow and wall_filter_result:
+                try:
+                    original_tp = take_profit
+                    original_sl = stop_loss
+
+                    if direction == 'long':
+                        # 做多：检查订单流墙（上方阻力）
+                        if wall_filter_result.get('nearest_resistance'):
+                            order_flow_resistance = wall_filter_result['nearest_resistance']
+                            # 如果阻力墙在原始止盈以内，调整止盈到阻力墙之前
+                            if order_flow_resistance < take_profit:
+                                take_profit = order_flow_resistance * 0.995  # 在阻力墙前0.5%
+                                logging.info(f"[订单流墙优化] 止盈: ${original_tp:,.2f} → ${take_profit:,.2f} (阻力墙: ${order_flow_resistance:,.2f})")
+
+                    elif direction == 'short':
+                        # 做空：检查订单流墙（下方支撑）
+                        if wall_filter_result.get('nearest_support'):
+                            order_flow_support = wall_filter_result['nearest_support']
+                            # 如果支撑墙在原始止盈以内，调整止盈到支撑墙之前
+                            if order_flow_support > take_profit:
+                                take_profit = order_flow_support * 1.005  # 在支撑墙前0.5%
+                                logging.info(f"[订单流墙优化] 止盈: ${original_tp:,.2f} → ${take_profit:,.2f} (支撑墙: ${order_flow_support:,.2f})")
+
+                    if original_tp != take_profit:
+                        logging.info(f"[订单流墙] ✅ 止盈已优化，提前{abs((take_profit/current_price - 1)/(original_tp/current_price - 1) - 1)*100:.1f}%止盈")
+
+                except Exception as e:
+                    logging.warning(f"[订单流墙优化] 失败: {e}")
+            # ================================================
+
             # 开仓
             logging.info(f"[开仓] {direction.upper()} @ ${current_price:.2f}")
             logging.info(f"  止盈: ${take_profit:.2f} ({(take_profit/current_price - 1)*100:+.1f}%)")
             logging.info(f"  止损: ${stop_loss:.2f} ({(stop_loss/current_price - 1)*100:+.1f}%)")
-            logging.info(f"  信号: {signal_type} | 置信度: {confidence:.2f}")
+            logging.info(f"  信号: {signal_type} | 置信度: {final_confidence:.2f}")
 
             # 更新状态
             self.config.has_position = True
