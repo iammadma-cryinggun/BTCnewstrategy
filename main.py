@@ -22,7 +22,7 @@ import sys
 import os
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 from scipy.fft import fft, ifft
@@ -905,7 +905,7 @@ class V80TradingEngine:
                 loop_count += 1
 
                 # 获取当前北京时间
-                now_beijing = datetime.utcnow() + timedelta(hours=8)
+                now_beijing = datetime.now() + timedelta(hours=8)
 
                 # 心跳日志（每10分钟一次）- 显示数据采集状态
                 if loop_count % heartbeat_interval == 0:
