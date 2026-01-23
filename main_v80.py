@@ -886,8 +886,21 @@ class V80TradingEngine:
         last_signal_check_hour = None
         last_position_check_hour = None
 
+        loop_count = 0
+        heartbeat_interval = 3600  # 每小时打印一次心跳（3600秒）
+
         while True:
             try:
+                loop_count += 1
+
+                # 心跳日志（每小时一次）
+                if loop_count % heartbeat_interval == 0:
+                    current_time_str = now_beijing.strftime('%Y-%m-%d %H:%M:%S')
+                    logging.info(f"♥ [{current_time_str}] 系统运行中 - 循环次数: {loop_count:,}")
+                    logging.info(f"  当前持仓: {'有' if self.config.has_position else '无'}")
+                    logging.info(f"  历史信号数: {len(self.config.signal_history)}")
+                    logging.info(f"  历史交易数: {self.config.total_trades}")
+
                 # 获取当前北京时间
                 now_beijing = datetime.utcnow() + timedelta(hours=8)
                 current_hour = now_beijing.hour
